@@ -14,6 +14,14 @@ test("the kitchen grid has immutable row and column tracks", () => {
   assert.match(page, /className="algorithm-selector"/);
 });
 
+test("repository declares noncommercial licensing and usage notification", () => {
+  const license = fs.readFileSync(new URL("../LICENSE", import.meta.url), "utf8");
+  const notice = fs.readFileSync(new URL("../NOTICE.md", import.meta.url), "utf8");
+  assert.match(license, /PolyForm Noncommercial License 1\.0\.0/);
+  assert.match(notice, /Commercial use is not permitted/);
+  assert.match(notice, /github\.com\/marsguo2049\/kitchen\/issues/);
+});
+
 function loadSimulationHarness() {
   const pageSource = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const pureSource = pageSource
