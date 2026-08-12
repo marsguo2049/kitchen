@@ -6,9 +6,12 @@ import ts from "typescript";
 
 test("the kitchen grid has immutable row and column tracks", () => {
   const css = fs.readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(css, /grid-template-columns:\s*repeat\(9,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /grid-template-rows:\s*repeat\(8,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /\.robot\s*\{[^}]*position:\s*absolute/s);
+  for (const id of ["v1", "v2", "v3", "v4"]) assert.match(page, new RegExp(`${id}: \\{`));
+  assert.match(page, /className="algorithm-selector"/);
 });
 
 function loadSimulationHarness() {
@@ -17,7 +20,7 @@ function loadSimulationHarness() {
     .slice(0, pageSource.indexOf("export default function Home"))
     .replace(/^"use client";\s*/m, "")
     .replace(/^import .*?;\s*/m, "");
-  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame };`;
+  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runBenchmark, exactWindowSequence, ALGORITHM_IDS };`;
   const javascript = ts.transpileModule(harnessSource, {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -26,29 +29,9 @@ function loadSimulationHarness() {
   return context.__simulation;
 }
 
-function advanceClock(state, cloneGame) {
-  const next = cloneGame(state);
-  next.timeLeft = Math.max(0, next.timeLeft - 1);
-  for (const pot of Object.values(next.pots)) {
-    if (pot.recipe && !pot.ready) {
-      pot.cookLeft = Math.max(0, pot.cookLeft - 1);
-      pot.ready = pot.cookLeft === 0;
-    }
-  }
-  next.orders = next.orders.map((order) => ({
-    ...order,
-    remaining: Math.max(0, order.remaining - 1),
-  }));
-  if (next.timeLeft === 0) {
-    next.running = false;
-    next.ended = true;
-  }
-  return next;
-}
-
 for (const difficulty of ["training", "rush"]) {
-  test(`autonomous ${difficulty} flow completes two orders without deadlock`, () => {
-    const { createInitialState, autoStep, cloneGame } = loadSimulationHarness();
+  for (const algorithm of ["v1", "v2", "v3", "v4"]) test(`${algorithm} autonomous ${difficulty} flow completes two orders without deadlock`, () => {
+    const { createInitialState, autoStep, advanceClock } = loadSimulationHarness();
     let state = createInitialState(difficulty, true);
     let lastSignature = "";
     let unchangedSteps = 0;
@@ -56,22 +39,25 @@ for (const difficulty of ["training", "rush"]) {
     let sawCooking = false;
     let sawPlate = false;
     let sawDish = false;
+    let sawCrossOrderPrep = false;
 
     for (let step = 1; step <= 360 && state.delivered < 2 && !state.ended; step += 1) {
-      state = autoStep(state, difficulty);
-      if (step % 2 === 0) state = advanceClock(state, cloneGame);
+      state = autoStep(state, difficulty, algorithm);
+      if (step % 2 === 0) state = advanceClock(state);
 
       const mainPot = state.pots["left-pot"];
       sawTwoIngredients ||= mainPot.ingredients.length === 2;
       sawCooking ||= Boolean(mainPot.recipe);
       sawPlate ||= state.robots.some((robot) => robot.carrying?.kind === "plate");
       sawDish ||= state.robots.some((robot) => robot.carrying?.kind === "dish");
+      sawCrossOrderPrep ||= Boolean(state.prefetch);
 
       const signature = JSON.stringify({
         robots: state.robots.map(({ row, col, carrying, task }) => ({ row, col, carrying, task })),
         jobs: state.cycle?.jobs,
         phase: state.cycle?.phase,
         pot: mainPot,
+        prefetch: state.prefetch,
         delivered: state.delivered,
       });
       unchangedSteps = signature === lastSignature ? unchangedSteps + 1 : 0;
@@ -84,5 +70,16 @@ for (const difficulty of ["training", "rush"]) {
     assert.equal(sawPlate, true, "a robot should fetch a plate while cooking");
     assert.equal(sawDish, true, "the cooked recipe should be plated");
     assert.ok(state.delivered >= 2, `expected two deliveries, got ${state.delivered}`);
+    if (algorithm !== "v1") assert.equal(sawCrossOrderPrep, true, `${algorithm} should overlap work across orders`);
   });
 }
+
+test("standardized benchmark exposes meaningful V1–V4 differences", () => {
+  const { runBenchmark } = loadSimulationHarness();
+  const training = Object.fromEntries(["v1", "v2", "v3", "v4"].map((algorithm) => [algorithm, runBenchmark(algorithm, "training")]));
+  const rush = Object.fromEntries(["v1", "v2", "v3", "v4"].map((algorithm) => [algorithm, runBenchmark(algorithm, "rush")]));
+  assert.ok(training.v2.tardiness < training.v1.tardiness, "pipeline should reduce training tardiness");
+  assert.ok(training.v3.delivered > training.v2.delivered, "distance auction should improve training throughput");
+  assert.ok(rush.v3.tardiness < rush.v2.tardiness, "distance auction should reduce rush tardiness");
+  assert.notEqual(rush.v4.sequence, rush.v3.sequence, "exact window search should choose a different rush sequence");
+});
