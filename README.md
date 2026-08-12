@@ -41,7 +41,7 @@ The robots move only in four directions. They cannot occupy the same grid cell, 
 
 ```bash
 npm install
-npm run dev
+npm run dev:pages
 ```
 
 ## Validation
