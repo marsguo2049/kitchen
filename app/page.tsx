@@ -734,7 +734,7 @@ export default function Home() {
           </>}
         </aside>
       </section>
-      <footer><span><i /> 双机器人离散事件仿真 · V1–V4</span><p>仅供学习与研究参考，禁止商业使用；使用或改编前请通过 GitHub Issue 告知作者。</p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
+      <footer><span><i /> 双机器人离散事件仿真 · V1–V4</span><p>仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
     </main>
   );
 }
