@@ -15,13 +15,16 @@ test("the kitchen grid has immutable row and column tracks", () => {
   assert.match(page, /运行三种策略/);
   assert.match(page, /导出 MD/);
   assert.match(page, /className="experiment-result"/);
-  assert.match(page, /<small>移动<\/small>/);
-  assert.match(page, /只改变排名，不改变仿真结果/);
+  assert.match(page, /tr\(language, "移动", "Travel"\)/);
+  assert.match(page, /目标既影响调度，也用于结果排名/);
   assert.match(page, /模型与算法/);
   assert.match(page, /在线决策与状态变量/);
   assert.match(page, /lex max \(Q, −T, S, −M\)/);
   assert.match(page, /启发式仿真 · 非全局优化器/);
   assert.match(page, /δ\(p,s\) = min/);
+  assert.match(page, /Scheduling objective/);
+  assert.match(page, /\(\[1, 2, 4, 8\] as const\)/);
+  assert.match(page, /Model & Algorithms/);
   assert.doesNotMatch(page, /算法实验台|标准到达|高峰到达|移动利用率/);
 });
 
@@ -36,6 +39,8 @@ test("repository declares noncommercial licensing and usage notification", () =>
 test("playback speed does not change the simulated decision budget", () => {
   const page = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /500 \/ speed/);
+  assert.match(page, /useState<1 \| 2 \| 4 \| 8>\(2\)/);
+  assert.match(page, /\(\[1, 2, 4, 8\] as const\)/);
   assert.match(page, /tickRef\.current % 2 === 0/);
   assert.match(page, /mode !== "manual"[^]*setInterval\(\(\) => setGame\(\(previous\) => advanceClock\(previous\)\), 1000\)/);
 });
@@ -44,10 +49,10 @@ function loadSimulationHarness() {
   const pageSource = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const pureSource = pageSource
     .slice(0, pageSource.indexOf("export default function Home"))
-    .replace(/\nfunction ModelView\(\)[\s\S]*$/, "")
+    .replace(/\nfunction ModelView[\s\S]*$/, "")
     .replace(/^"use client";\s*/m, "")
     .replace(/^import .*?;\s*/m, "");
-  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runSimulation, experimentMarkdown, deliveryReward, exactWindowSequence, ALGORITHM_IDS };`;
+  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runSimulation, experimentMarkdown, deliveryReward, exactWindowSequence, selectOrder, runtimeText, ALGORITHM_IDS };`;
   const javascript = ts.transpileModule(harnessSource, {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -135,6 +140,33 @@ test("on-demand experiments support arbitrary horizons and meaningful strategy d
   assert.ok(training.dual.delivered >= training.pipeline.delivered, "dual-stove strategy should not reduce pipeline throughput");
 });
 
+test("the live objective changes the order selected by the scheduler", () => {
+  const { createInitialState, selectOrder } = loadSimulationHarness();
+  const state = createInitialState("training", true);
+  state.orders = [
+    { id: 1, recipe: "mushroom-soup", remaining: 5, maxTime: 70 },
+    { id: 2, recipe: "garden-stew", remaining: 50, maxTime: 70 },
+    { id: 3, recipe: "tomato-soup", remaining: 50, maxTime: 70 },
+  ];
+  assert.equal(selectOrder(state, "baseline", "tardiness").id, 1, "least-slack objective should protect the urgent order");
+  assert.equal(selectOrder(state, "baseline", "throughput").id, 2, "throughput objective should choose the shortest estimated recipe");
+});
+
+test("English mode translates runtime decisions, tasks, and targets", () => {
+  const { createInitialState, autoStep, advanceClock, runtimeText } = loadSimulationHarness();
+  const han = /[\u3400-\u9fff]/;
+  for (const algorithm of ["baseline", "pipeline", "dual"]) {
+    let state = createInitialState("training", true);
+    for (let step = 1; step <= 240 && !state.ended; step += 1) {
+      state = autoStep(state, "training", algorithm, "balanced");
+      if (step % 2 === 0) state = advanceClock(state);
+      for (const value of [state.message, state.decision, ...state.robots.flatMap((robot) => [robot.task, robot.target])]) {
+        assert.equal(han.test(runtimeText(value, "en")), false, `${algorithm} left untranslated runtime text: ${value}`);
+      }
+    }
+  }
+});
+
 test("scoring rule rewards punctual work and penalizes lateness explicitly", () => {
   const { deliveryReward } = loadSimulationHarness();
   const onTime = deliveryReward({ remaining: 10 }, 2);
@@ -145,15 +177,20 @@ test("scoring rule rewards punctual work and penalizes lateness explicitly", () 
   assert.equal(late.combo, 0);
 });
 
-test("Markdown report contains parameters, objectives, score formula and all metrics", () => {
+test("Markdown reports are complete and fully localized", () => {
   const { runSimulation, experimentMarkdown } = loadSimulationHarness();
-  const batch = { duration: 90, difficulty: "rush", objective: "balanced", createdAt: "2026-08-13 10:00:00", results: ["baseline", "pipeline", "dual"].map((algorithm) => runSimulation(algorithm, "rush", 90)) };
+  const batch = { duration: 90, difficulty: "rush", objective: "balanced", language: "zh", createdAt: "2026-08-13 10:00:00", results: ["baseline", "pipeline", "dual"].map((algorithm) => runSimulation(algorithm, "rush", 90)) };
   const markdown = experimentMarkdown(batch);
   assert.match(markdown, /仿真时长：90 秒/);
-  assert.match(markdown, /主要评价目标：综合字典序/);
+  assert.match(markdown, /当前调度目标：综合字典序/);
   assert.match(markdown, /逾期秒数 × 5/);
   assert.match(markdown, /## 模型口径/);
   assert.match(markdown, /lex max \(Q, -T, S, -M\)/);
-  assert.match(markdown, /固定在线启发式/);
+  assert.match(markdown, /同时引导实时订单优先级/);
   assert.match(markdown, /\| 排名 \| 策略 \| 方法 \| 完成 \| 得分 \|/);
+  const english = experimentMarkdown({ ...batch, language: "en" });
+  assert.match(english, /# Robo Kitchen Experiment Report/);
+  assert.match(english, /Active scheduling objective: Balanced Lexicographic/);
+  assert.match(english, /guides live order priority/);
+  assert.equal(/[\u3400-\u9fff]/.test(english), false, "English report should not contain Chinese text");
 });

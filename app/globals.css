@@ -31,6 +31,9 @@ button:focus-visible { outline: 3px solid #f4bd52; outline-offset: 2px; }
 h1 { margin: 3px 0 0; font-family: var(--font-geist-mono), monospace; font-size: clamp(21px, 2.2vw, 32px); line-height: 1; letter-spacing: -.055em; }
 h1 span { margin-left: 7px; font-family: Arial, sans-serif; font-size: .54em; letter-spacing: .05em; color: var(--muted); }
 .top-actions { display: flex; gap: 9px; }
+.language-picker { display: grid; grid-template-columns: 1fr 1fr; align-self: stretch; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,248,.86); }
+.language-picker button { min-width: 31px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 9px; font-weight: 900; cursor: pointer; }
+.language-picker button.active { background: var(--ink); color: #fff; }
 .icon-button, .music-button, .restart-button { border: 1px solid var(--line); background: rgba(255,253,248,.86); min-height: 42px; border-radius: 12px; cursor: pointer; box-shadow: 0 3px 10px rgba(33,55,55,.04); }
 .icon-button { width: 42px; font-weight: 900; font-size: 19px; }
 .music-button { min-width: 84px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 12px; color: var(--muted); font-size: 10px; font-weight: 900; }
@@ -235,15 +238,20 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
 .algorithm-selector button.active { border-color: var(--teal); background: #edf8f4; box-shadow: 0 0 0 2px rgba(43,165,152,.12); }
 .algorithm-selector button.active b { background: var(--teal); color: #fff; }
 .algorithm-selector button.active span { color: var(--teal-dark); }
+.live-objective { display: block; margin: 0 0 10px; padding: 10px; border: 1px solid #d7e5df; border-radius: 12px; background: #f1f8f5; }
+.live-objective > span { display: block; margin-bottom: 5px; color: var(--teal-dark); font-size: 9px; font-weight: 900; }
+.live-objective select { width: 100%; min-height: 34px; padding: 0 8px; border: 1px solid #c8ddd6; border-radius: 8px; background: #fff; color: var(--ink); font-size: 10px; font-weight: 900; }
+.live-objective small { display: block; margin-top: 6px; color: #647875; font-size: 8px; line-height: 1.45; }
 .lab-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-bottom: 10px; padding: 3px; border-radius: 11px; background: #eef1ec; }
 .lab-tabs button { min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 900; cursor: pointer; }
 .lab-tabs button.active { color: var(--ink); background: #fff; box-shadow: 0 2px 7px rgba(23,50,56,.08); }
 .lab-view { min-width: 0; }
 .auto-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 13px; }
 .auto-button { min-height: 56px; }
-.speed-picker { display: grid; grid-template-columns: 1fr 1fr; width: 86px; padding: 4px; border-radius: 11px; background: #eef1ec; }
+.speed-picker { display: grid; grid-template-columns: repeat(4, 1fr); width: 126px; padding: 4px; border-radius: 11px; background: #eef1ec; }
 .speed-picker > span { grid-column: 1 / -1; text-align: center; color: var(--muted); font-size: 8px; font-weight: 800; }
-.speed-picker button { border: 0; border-radius: 7px; background: transparent; font-size: 9px; font-weight: 900; cursor: pointer; }
+.speed-picker button { min-width: 0; min-height: 27px; display: grid; place-items: center; align-content: center; border: 0; border-radius: 7px; background: transparent; font-size: 9px; font-weight: 900; cursor: pointer; }
+.speed-picker button small { display: block; font-size: 5px; line-height: 1; color: var(--teal-dark); }
 .speed-picker button.active { background: #fff; color: var(--teal-dark); box-shadow: 0 2px 5px rgba(23,50,56,.09); }
 .controls-panel article.robot-card { cursor: default; }
 .robot-cards.compact { gap: 5px; }
@@ -380,7 +388,7 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
   .topbar { flex-wrap: wrap; }
   .mode-tabs { order: 3; width: 100%; }
   .mode-tabs button { flex: 1; }
-  .controls-panel .algorithm-selector, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
+  .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
   .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid { grid-column: auto; }
   .controls-panel .method-details, .controls-panel .method-card { grid-column: 1 / -1; margin-top: 0; }
   .constraint-grid, .policy-flow { grid-template-columns: 1fr 1fr; }
@@ -390,7 +398,7 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
 @media (max-width: 760px) {
   .topbar .top-actions { margin-left: auto; }
   .task-bubble { display: none; }
-  .controls-panel .algorithm-selector, .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
+  .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
   .controls-panel .method-details, .controls-panel .method-card { grid-column: 1 / -1; }
   .auto-actions { grid-template-columns: 1fr 92px; }
   .model-hero { grid-template-columns: 1fr; }
@@ -406,6 +414,7 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
   h1 span { display: none; }
   .music-button { width: 42px; min-width: 42px; padding: 0; font-size: 15px; }
   .music-label { display: none; }
+  .language-picker button { min-width: 27px; }
   .experiment-result { grid-template-columns: 18px minmax(52px, 1.2fr) repeat(4, minmax(30px, .7fr)); padding-inline: 4px; }
   .mode-tabs button { padding-inline: 7px; font-size: 9px; }
   .mode-tabs button i { margin-right: 3px; }

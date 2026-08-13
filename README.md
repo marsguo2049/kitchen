@@ -6,7 +6,7 @@ Robo Kitchen is a 2D operations-research teaching prototype in which two robots 
 
 - **Simulation:** orders, deadlines, precedence constraints, shared workstations, cooking time, robot state, and four-direction movement.
 - **Routing:** breadth-first search (BFS) finds a shortest feasible path to a workstation; one-step position reservations prevent two robots from entering the same cell.
-- **Scheduling:** the active comparison contains a sequential baseline, a single-stove pipeline with distance auction, and a rolling dual-stove resource-aware heuristic.
+- **Scheduling:** the active comparison contains a sequential baseline, a single-stove pipeline with distance auction, and a rolling dual-stove resource-aware heuristic. The selected objective actively changes their online priorities.
 - **Experiment runner:** choose a 30–600 second horizon, demand pressure, and evaluation objective; results are generated only when the experiment is run and can be exported as Markdown.
 - **Audio:** the optional soundtrack is generated in the browser from an original note pattern. No music or audio asset from *Overcooked* is included.
 
@@ -72,13 +72,13 @@ The delivery reward is
 - on time: `g_i = 100 + 3(d_i-C_i) + 25 min(k_i-1, 4)`;
 - late: `g_i = max(20, 100 - 5L_i)`;
 
-where `k_i` is the consecutive on-time delivery count. A late delivery resets the combo. The selected experiment objective ranks the outputs of the three fixed policies; it does not modify or re-optimize those policies.
+where `k_i` is the consecutive on-time delivery count. A late delivery resets the combo. The selected objective is a live scheduling parameter: it changes order priority, rolling-window sequencing, and robot-job assignment before it is also used to rank experiment outputs. The policies remain transparent heuristics; changing the objective does not retrain a model or invoke a global optimization solver.
 
 ### Policy rules
 
-- **A — sequential EDF:** `i* = arg min_i (d_i-t, i)`, fixed robot/board roles, one order at a time.
-- **B — pipeline auction:** retains EDF, then enumerates the two ingredient and two cutting-board assignments using `c(r,g,b,k) = δ(p_r,s_g) + δ(s_g,b) + δ(b,k)` and chooses the minimum total cost. One future ingredient is prefetched while the current dish cooks.
-- **C — rolling dual stove:** enumerates the current order-window permutations and minimizes `Σ_h [25 max(0, Ĉ_πh-q_πh) + Ĉ_πh]`, where `q_i` is remaining allowance and `Ĉ_i` is an internal sequencing estimate. It fills both stoves, dynamically assigns free robots, stages plates beside pots, and opportunistically prefetches future work.
+- **A — sequential objective baseline:** selects an order with the active objective vector `v_f(i)`, keeps fixed robot/board roles, and processes one order at a time.
+- **B — pipeline auction:** uses the same objective-guided order priority, then enumerates ingredient and cutting-board assignments with `c(r,g,b,k) = δ(p_r,s_g) + δ(s_g,b) + δ(b,k)`. One future ingredient is prefetched while the current dish cooks.
+- **C — rolling dual stove:** enumerates the current order-window permutations and compares an objective-specific vector `V_f(π)`. It fills both stoves and assigns free robots with `h_f(r,i,j)`, whose distance, urgency, and processing-time weights depend on objective `f`.
 
 The C-policy sequencing estimates (`19`, `21`, or `22`, plus a `2`-unit recipe-change allowance) are priority surrogates only; they are not the simulator's physical processing times.
 
@@ -86,7 +86,7 @@ The C-policy sequencing estimates (`19`, `21`, or `22`, plus a `2`-unit recipe-c
 
 | Strategy | Method | Main decision rule | Scope |
 | --- | --- | --- | --- |
-| A · Baseline | Sequential EDF | Earliest deadline first, fixed robot roles, next order after delivery | Reproducible baseline |
+| A · Baseline | Sequential objective priority | Active objective vector, fixed robot roles, next order after delivery | Reproducible baseline |
 | B · Pipeline | Pipeline + distance auction | Prepare the next order while cooking and assign work by estimated travel | Combines former V2 and V3 |
 | C · Dual stove | Rolling window + resource dispatch | Use both stoves, stage plates beside pots, and keep free robots preparing future work | Combines former V4 and V5 |
 
@@ -94,7 +94,7 @@ The earlier V1–V5 labels are retained as project history, but the interface no
 
 ## Objectives and score
 
-Every report retains all metrics. The selected primary objective only controls ranking:
+Every report retains all metrics. The selected primary objective controls both online scheduling and final ranking:
 
 - maximize completed orders;
 - maximize score;
@@ -112,7 +112,7 @@ Score is not a substitute for throughput or tardiness. A strategy can complete m
 
 ## Experiment protocol
 
-The interface no longer shows a precomputed “standard 120-second” table. The user sets the horizon and runs all three strategies from the same deterministic initial map, robot positions, and order queue. The simulator performs exactly two decisions per simulated second. The 1×/2× control changes playback speed only, so it does not change the decision budget.
+The interface no longer shows a precomputed “standard 120-second” table. The user sets the horizon and runs all three strategies from the same deterministic initial map, robot positions, and order queue. The simulator performs exactly two decisions per simulated second. Playback defaults to 2×, with 1×, 4×, and 8× alternatives; these controls change wall-clock playback only, not the decision budget.
 
 After a run, the complete parameters, ranking, metrics, delivery sequence, score definition, and strategy notes can be exported as a `.md` report.
 
@@ -122,7 +122,7 @@ After a run, the complete parameters, ranking, metrics, delivery sequence, score
 - **Manual experience** preserves the same kitchen and process as a human-control comparison.
 - **Standard / rush demand** changes order deadlines and cooking pressure.
 
-Changing the scheduling strategy or demand mode resets the scenario so comparisons begin from the same initial state. Changing only the ranking objective re-sorts the existing experiment results without rerunning the simulation.
+Changing the scheduling strategy, demand mode, or objective resets the scenario so a changed priority rule is evaluated from the same initial state. The interface and exported report can be switched completely between Chinese and English.
 
 ## Run locally
 
@@ -144,7 +144,14 @@ The regression suite checks the immutable 9×8 map, all three strategies in both
 
 The interface names three recipes—tomato soup, mushroom soup, and garden stew—but all currently share the same two-ingredient precedence structure. They therefore represent recipe variants, not three fundamentally different production processes.
 
-Future versions may add recipes with different ingredient counts and processing routes, multiple cooking appliances, and switchable maps. These are intentionally left out of V6.2 so the current experiment remains controlled and interpretable.
+The V6.3 model page now defines the next scalable formulation:
+
+- a seeded scenario generator for reachable maps with controllable congestion and workstation counts;
+- a recipe generator for ingredient sets, precedence graphs, processing times, and workstation requirements;
+- a robot set `R={1,…,m}` with matching collision, carrying, and resource-capacity constraints;
+- stored scenario files and random seeds for reproducible comparisons.
+
+These generators are deliberately specified but not yet activated, so the current V6.3 experiment remains controlled and interpretable.
 
 ## GitHub Pages
 
