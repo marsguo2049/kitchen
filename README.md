@@ -54,7 +54,7 @@ After a run, the complete parameters, ranking, metrics, delivery sequence, score
 - **Manual experience** preserves the same kitchen and process as a human-control comparison.
 - **Standard / rush demand** changes order deadlines and cooking pressure.
 
-Changing the algorithm or demand mode resets the scenario so comparisons begin from the same initial state.
+Changing the scheduling strategy or demand mode resets the scenario so comparisons begin from the same initial state. Changing only the ranking objective re-sorts the existing experiment results without rerunning the simulation.
 
 ## Run locally
 
@@ -76,7 +76,7 @@ The regression suite checks the immutable 9×8 map, all three strategies in both
 
 The interface names three recipes—tomato soup, mushroom soup, and garden stew—but all currently share the same two-ingredient precedence structure. They therefore represent recipe variants, not three fundamentally different production processes.
 
-Future versions may add recipes with different ingredient counts and processing routes, multiple cooking appliances, and switchable maps. These are intentionally left out of V6 so the current experiment remains controlled and interpretable.
+Future versions may add recipes with different ingredient counts and processing routes, multiple cooking appliances, and switchable maps. These are intentionally left out of V6.1 so the current experiment remains controlled and interpretable.
 
 ## GitHub Pages
 

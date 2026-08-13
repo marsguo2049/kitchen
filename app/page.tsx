@@ -106,15 +106,16 @@ type Station =
 const ROWS = 8;
 const COLS = 9;
 const DEFAULT_ROUND_SECONDS = 120;
+const normalizeDuration = (value: string | number) => Math.max(30, Math.min(600, Math.round(Number(value) / 10) * 10 || 30));
 const DIRECTIONS = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
 const RECIPES: Record<RecipeId, { name: string; shortName: string; icon: string; ingredients: [Ingredient, Ingredient]; color: string }> = {
   "tomato-soup": { name: "双番茄浓汤", shortName: "番茄汤", icon: "🍅", ingredients: ["tomato", "tomato"], color: "#ef6a54" },
   "mushroom-soup": { name: "奶油蘑菇汤", shortName: "蘑菇汤", icon: "🍄", ingredients: ["mushroom", "mushroom"], color: "#9b7358" },
   "garden-stew": { name: "田园双拼炖菜", shortName: "双拼炖菜", icon: "🥘", ingredients: ["tomato", "mushroom"], color: "#e49c3f" },
 };
-const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName: string; kind: string; steps: string[]; note: string }> = {
+const ALGORITHMS: Record<AlgorithmId, { code: string; name: string; shortName: string; kind: string; steps: string[]; note: string }> = {
   baseline: {
-    version: "A · 基线",
+    code: "A",
     name: "顺序 EDF 基线",
     shortName: "顺序基线",
     kind: "基准启发式",
@@ -122,7 +123,7 @@ const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName
     note: "一次只处理一道菜，是后续策略的可复现实验基线。",
   },
   pipeline: {
-    version: "B · 流水",
+    code: "B",
     name: "流水竞价协作调度",
     shortName: "流水竞价",
     kind: "分配启发式",
@@ -130,7 +131,7 @@ const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName
     note: "合并原 V2 流水备料与 V3 距离竞价，作为单灶协作策略。",
   },
   dual: {
-    version: "C · 双灶",
+    code: "C",
     name: "滚动双灶资源调度",
     shortName: "双灶协同",
     kind: "资源感知启发式",
@@ -140,8 +141,8 @@ const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName
 };
 const ALGORITHM_IDS = Object.keys(ALGORITHMS) as AlgorithmId[];
 const OBJECTIVES: Record<ObjectiveId, { label: string; direction: string; description: string }> = {
-  throughput: { label: "最大完成量", direction: "越大越好", description: "优先比较时限内完成的订单数。" },
-  score: { label: "最大积分", direction: "越大越好", description: "比较交付基础分、准时奖励与连击奖励之和。" },
+  throughput: { label: "最多完成", direction: "越大越好", description: "优先比较时限内完成的订单数。" },
+  score: { label: "最高积分", direction: "越大越好", description: "比较交付基础分、准时奖励与连击奖励之和。" },
   tardiness: { label: "最小逾期", direction: "越小越好", description: "比较所有已交付订单的累计逾期秒数。" },
   travel: { label: "最少移动", direction: "越小越好", description: "比较两台机器人累计移动格数。" },
   balanced: { label: "综合字典序", direction: "依次判定", description: "先最大完成量，再最小逾期、最大积分、最少移动。" },
@@ -378,7 +379,7 @@ function startCycle(game: GameState, algorithm: AlgorithmId) {
     game.decision = `选择剩余时间最短的 #${selected.id} ${RECIPES[selected.recipe].shortName}；两份原料并行处理。`;
   }
   const robotJobs = [...jobs].sort((a, b) => a.robotId - b.robotId);
-  game.message = `${ALGORITHMS[algorithm].version} 规划 #${selected.id}：阿橙负责${ingredientName(robotJobs[0].ingredient)}，小青负责${ingredientName(robotJobs[1].ingredient)}。`;
+  game.message = `策略 ${ALGORITHMS[algorithm].code} 规划 #${selected.id}：阿橙负责${ingredientName(robotJobs[0].ingredient)}，小青负责${ingredientName(robotJobs[1].ingredient)}。`;
 }
 function startPrefetch(game: GameState, algorithm: AlgorithmId) {
   if (!game.cycle || game.prefetch || algorithm === "baseline") return;
@@ -390,7 +391,7 @@ function startPrefetch(game: GameState, algorithm: AlgorithmId) {
   const boardStation: BoardStation = prefetcherId === 0 ? "2-0" : "2-8";
   const ingredient = [...ingredients].sort((a, b) => assignmentCost(game.robots[prefetcherId], a, boardStation) - assignmentCost(game.robots[prefetcherId], b, boardStation))[0];
   game.prefetch = { orderId: selected.id, ingredient, stage: "fetch", robotId: prefetcherId, boardKey, boardStation, counterKey: "pass-top" };
-  game.decision = `${ALGORITHMS[algorithm].version} 在烹饪窗口预取 #${selected.id} 的${ingredientName(ingredient)}。`;
+  game.decision = `策略 ${ALGORITHMS[algorithm].code} 在烹饪窗口预取 #${selected.id} 的${ingredientName(ingredient)}。`;
 }
 function advancePrefetch(game: GameState, reserved: Set<string>) {
   const prefetch = game.prefetch;
@@ -866,10 +867,10 @@ function compareResults(a: ExperimentResult, b: ExperimentResult, objective: Obj
   return b.delivered - a.delivered || b.score - a.score;
 }
 function experimentMarkdown(batch: ExperimentBatch) {
-  const pressure = batch.difficulty === "training" ? "标准到达" : "高峰到达";
+  const pressure = batch.difficulty === "training" ? "标准压力" : "高峰压力";
   const ranked = [...batch.results].sort((a, b) => compareResults(a, b, batch.objective));
-  const rows = ranked.map((result, index) => `| ${index + 1} | ${ALGORITHMS[result.algorithm].version} | ${ALGORITHMS[result.algorithm].name} | ${result.delivered} | ${result.score} | ${result.tardiness} | ${result.travel} | ${result.idle} | ${result.conflicts} | ${result.replans} | ${result.sequence || "—"} |`).join("\n");
-  return `# Robo Kitchen 实验报告\n\n- 生成时间：${batch.createdAt}\n- 仿真时长：${batch.duration} 秒\n- 订单压力：${pressure}\n- 主要评价目标：${OBJECTIVES[batch.objective].label}（${OBJECTIVES[batch.objective].direction}）\n- 决策频率：2 次 / 仿真秒\n- 初始条件：相同地图、机器人位置与确定性订单队列\n\n> 本报告由页面按当前参数运行后生成，不是预先写入的结果。速度按钮只改变播放速度，不改变每个仿真秒的决策次数。\n\n## 积分规则\n\n- 准时交付：100 基础分 + 剩余秒数 × 3 + 连续准时奖励（每单 +25，最高 +100）。\n- 逾期交付：100 基础分 − 逾期秒数 × 5，单笔最低 20 分，并中断连续准时奖励。\n- 积分不会替代其他目标；报告同时保留完成量、逾期和移动量。\n\n| 排名 | 策略 | 方法 | 完成 | 得分 | 逾期(s) | 移动(格) | 空闲步 | 冲突 | 重规划 | 交付顺序 |\n| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows}\n\n## 策略说明\n\n${ranked.map((result) => `### ${ALGORITHMS[result.algorithm].version} ${ALGORITHMS[result.algorithm].name}\n\n${ALGORITHMS[result.algorithm].note}`).join("\n\n")}\n\n## 后续扩展\n\n当前三种菜名共享同一类两原料工序。后续版本可加入不同工序长度、菜谱、地图和设备布局，但不属于本次实验。\n\n---\nRobo Kitchen · 非商用教学与研究项目\n`;
+  const rows = ranked.map((result, index) => `| ${index + 1} | ${ALGORITHMS[result.algorithm].code} | ${ALGORITHMS[result.algorithm].name} | ${result.delivered} | ${result.score} | ${result.tardiness} | ${result.travel} | ${result.idle} | ${result.conflicts} | ${result.replans} | ${result.sequence || "—"} |`).join("\n");
+  return `# Robo Kitchen 实验报告\n\n- 生成时间：${batch.createdAt}\n- 仿真时长：${batch.duration} 秒\n- 订单压力：${pressure}\n- 主要评价目标：${OBJECTIVES[batch.objective].label}（${OBJECTIVES[batch.objective].direction}）\n- 决策频率：2 次 / 仿真秒\n- 初始条件：相同地图、机器人位置与确定性订单队列\n\n> 本报告由页面按当前参数运行后生成，不是预先写入的结果。速度按钮只改变播放速度，不改变每个仿真秒的决策次数。\n\n## 积分规则\n\n- 准时交付：100 基础分 + 剩余秒数 × 3 + 连续准时奖励（每单 +25，最高 +100）。\n- 逾期交付：100 基础分 − 逾期秒数 × 5，单笔最低 20 分，并中断连续准时奖励。\n- 积分不会替代其他目标；报告同时保留完成量、逾期和移动量。\n\n| 排名 | 策略 | 方法 | 完成 | 得分 | 逾期(s) | 移动(格) | 空闲步 | 避让 | 调度 | 交付顺序 |\n| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows}\n\n## 策略说明\n\n${ranked.map((result) => `### 策略 ${ALGORITHMS[result.algorithm].code} · ${ALGORITHMS[result.algorithm].name}\n\n${ALGORITHMS[result.algorithm].note}`).join("\n\n")}\n\n## 后续扩展\n\n当前三种菜名共享同一类两原料工序。后续版本可加入不同工序长度、菜谱、地图和设备布局，但不属于本次实验。\n\n---\nRobo Kitchen · 非商用教学与研究项目\n`;
 }
 function formatTime(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 
@@ -917,6 +918,7 @@ export default function Home() {
   const [speed, setSpeed] = useState<1 | 2>(1);
   const [musicOn, setMusicOn] = useState(false);
   const [roundSeconds, setRoundSeconds] = useState(DEFAULT_ROUND_SECONDS);
+  const [durationDraft, setDurationDraft] = useState(String(DEFAULT_ROUND_SECONDS));
   const [objective, setObjective] = useState<ObjectiveId>("balanced");
   const [experiment, setExperiment] = useState<ExperimentBatch | null>(null);
   const [experimentRunning, setExperimentRunning] = useState(false);
@@ -933,17 +935,25 @@ export default function Home() {
     setAlgorithm(nextAlgorithm);
     resetGame(difficulty);
   };
-  const changeDuration = (value: number) => {
-    const duration = Math.max(30, Math.min(600, Math.round(value / 10) * 10 || 30));
+  const commitDuration = (value: string | number = durationDraft) => {
+    const duration = normalizeDuration(value);
     setRoundSeconds(duration);
+    setDurationDraft(String(duration));
     setExperiment(null);
     resetGame(difficulty, false, duration);
   };
+  const changeObjective = (nextObjective: ObjectiveId) => {
+    setObjective(nextObjective);
+    setExperiment((previous) => previous ? { ...previous, objective: nextObjective } : null);
+  };
   const runExperiment = () => {
+    const duration = normalizeDuration(durationDraft);
+    setRoundSeconds(duration);
+    setDurationDraft(String(duration));
     setExperimentRunning(true);
     window.setTimeout(() => {
-      const results = ALGORITHM_IDS.map((id) => runSimulation(id, difficulty, roundSeconds));
-      setExperiment({ duration: roundSeconds, difficulty, objective, createdAt: new Date().toLocaleString("zh-CN", { hour12: false }), results });
+      const results = ALGORITHM_IDS.map((id) => runSimulation(id, difficulty, duration));
+      setExperiment({ duration, difficulty, objective, createdAt: new Date().toLocaleString("zh-CN", { hour12: false }), results });
       setExperimentRunning(false);
     }, 30);
   };
@@ -1040,7 +1050,7 @@ export default function Home() {
 
   const cells = useMemo(() => Array.from({ length: ROWS * COLS }, (_, index) => ({ row: Math.floor(index / COLS), col: index % COLS })), []);
   const active = game.robots[game.activeRobot];
-  const utilization = game.metrics.travel + game.metrics.idle ? Math.round(game.metrics.travel / (game.metrics.travel + game.metrics.idle) * 100) : 0;
+  const movementShare = game.metrics.travel + game.metrics.idle ? Math.round(game.metrics.travel / (game.metrics.travel + game.metrics.idle) * 100) : 0;
   const selectedMethod = ALGORITHMS[algorithm];
   const rankedExperiment = experiment ? [...experiment.results].sort((a, b) => compareResults(a, b, experiment.objective)) : [];
 
@@ -1052,32 +1062,32 @@ export default function Home() {
           <button role="tab" aria-selected={mode === "auto"} className={mode === "auto" ? "active" : ""} onClick={() => selectMode("auto")}><i>✦</i> 自动调度</button>
           <button role="tab" aria-selected={mode === "manual"} className={mode === "manual" ? "active" : ""} onClick={() => selectMode("manual")}><i>✥</i> 手动体验</button>
         </div>
-        <div className="top-actions"><button className={`music-button ${musicOn ? "active" : ""}`} aria-pressed={musicOn} onClick={toggleMusic} title="原创程序化厨房配乐">{musicOn ? "♫ 音乐开" : "♪ 音乐关"}</button><button className="restart-button" onClick={() => resetGame(difficulty, true)}>重新开始</button></div>
+        <div className="top-actions"><button className={`music-button ${musicOn ? "active" : ""}`} aria-label={musicOn ? "关闭音乐" : "开启音乐"} aria-pressed={musicOn} onClick={toggleMusic} title="原创程序化厨房配乐"><span aria-hidden>{musicOn ? "♫" : "♪"}</span><span className="music-label">{musicOn ? "音乐开" : "音乐关"}</span></button><button className="restart-button" onClick={() => resetGame(difficulty, true)}>重新开始</button></div>
       </header>
 
       <section className="score-strip" aria-label="运行指标">
         <div><span>剩余时间</span><strong className={game.timeLeft <= 20 ? "danger" : ""}>{formatTime(game.timeLeft)}</strong></div>
         <div><span>完成订单</span><strong>{game.delivered}</strong></div>
         <div><span>团队得分</span><strong>{game.score.toLocaleString()}</strong></div>
-        <div><span>移动利用率</span><strong>{utilization}%</strong></div>
+        <div><span>移动步占比</span><strong>{movementShare}%</strong></div>
       </section>
 
       <section className="workspace">
         <aside className="orders-panel panel">
-          <div className="panel-title-row"><div><p className="section-kicker">ORDER QUEUE</p><h2>订单与优先级</h2></div><span className="live-pill"><i /> 动态</span></div>
+          <div className="panel-title-row"><div><p className="section-kicker">ORDER QUEUE</p><h2>订单队列</h2></div><span className="live-pill"><i /> 实时</span></div>
           <div className="order-list">{game.orders.map((order) => { const recipe = RECIPES[order.recipe]; const activeOrder = game.cycle?.orderId === order.id || game.smartPlans.some((plan) => plan.orderId === order.id); const prefetchedOrder = game.prefetch?.orderId === order.id; return (
             <article className={`order-card ${activeOrder ? "selected" : ""} ${prefetchedOrder ? "prefetching" : ""} ${order.remaining < 14 ? "urgent" : ""}`} key={order.id}>
               <div className="ticket-number">#{order.id}</div><div className="dish-icon" style={{ background: recipe.color }}>{recipe.icon}</div>
               <div className="order-copy"><strong>{recipe.name}</strong><span>{recipe.ingredients.map(ingredientName).join(" + ")}</span><div className="order-timer"><i style={{ width: `${Math.max(0, Math.min(100, order.remaining / order.maxTime * 100))}%` }} /></div></div><b>{order.remaining >= 0 ? `${order.remaining}s` : `逾期 ${-order.remaining}s`}</b>
               {activeOrder && <em className="planning-tag">执行中</em>}{prefetchedOrder && !activeOrder && <em className="planning-tag prefetch-tag">预备中</em>}
             </article>); })}</div>
-          <div className="decision-card"><span>{selectedMethod.version} · 当前决策</span><strong>{game.decision}</strong><p>算法切换会重置同一组确定性订单，便于公平观察策略差异。</p></div>
-          <div className="mode-picker"><span>订单压力</span><div><button className={difficulty === "training" ? "active" : ""} onClick={() => { setDifficulty("training"); setExperiment(null); resetGame("training"); }}>标准到达</button><button className={difficulty === "rush" ? "active" : ""} onClick={() => { setDifficulty("rush"); setExperiment(null); resetGame("rush"); }}>高峰到达</button></div></div>
+          <div className="decision-card"><span>策略 {selectedMethod.code} · 当前决策</span><strong>{game.decision}</strong></div>
+          <div className="mode-picker"><span>订单压力</span><div><button className={difficulty === "training" ? "active" : ""} onClick={() => { setDifficulty("training"); setExperiment(null); resetGame("training"); }}>标准</button><button className={difficulty === "rush" ? "active" : ""} onClick={() => { setDifficulty("rush"); setExperiment(null); resetGame("rush"); }}>高峰</button></div></div>
         </aside>
 
         <section className="kitchen-column">
           <div className="kitchen-frame">
-            <div className="kitchen-label"><span>GRID 01 · {mode === "auto" ? selectedMethod.version : "MANUAL"}</span><strong>{mode === "auto" ? selectedMethod.name : "手动对照实验"}</strong><em className={game.paused ? "paused" : ""}>{game.running ? (game.paused ? "已暂停" : "运行中") : "待启动"}</em></div>
+            <div className="kitchen-label"><span>GRID 01 · {mode === "auto" ? `策略 ${selectedMethod.code}` : "手动"}</span><strong>{mode === "auto" ? selectedMethod.name : "手动对照实验"}</strong><em className={game.paused ? "paused" : ""}>{game.running ? (game.paused ? "已暂停" : "运行中") : "待启动"}</em></div>
             <div className="kitchen-grid">{cells.map(({ row, col }) => {
               const key = coord(row, col); const station = STATIONS[key]; const robot = game.robots.find((candidate) => candidate.row === row && candidate.col === col); const isWall = WALLS.has(key);
               let status = "";
@@ -1089,29 +1099,28 @@ export default function Home() {
                 {robot && <div className={`robot ${robot.color} ${mode === "manual" && game.activeRobot === robot.id ? "active" : ""}`}><span className="antenna"/><span className="face"><i/><i/></span><strong>{robot.shortName}</strong>{robot.carrying && <em className="carried">{itemIcon(robot.carrying)}</em>}<span className="task-bubble">{robot.task}</span></div>}
               </div>;
             })}</div>
-            <div className="message-bar"><span className={`mini-robot ${active.color}`}>{mode === "auto" ? "AI" : active.shortName}</span><p>{game.message}</p><strong>{mode === "auto" ? `重规划 ${game.metrics.replans} 次` : (nearbyStation(active)?.label ?? "移动中")}</strong></div>
-            {!game.running && <div className="start-overlay"><div className="start-card"><p>{game.ended ? "SHIFT COMPLETE" : mode === "auto" ? `${selectedMethod.version} · AUTONOMOUS DISPATCH` : "MANUAL BENCHMARK"}</p><h2>{game.ended ? `完成 ${game.delivered} 道菜` : mode === "auto" ? selectedMethod.name : "亲自控制两台机器人"}</h2><span>{mode === "auto" ? selectedMethod.note : "作为对照策略，观察人工操作与自动调度的差异。"}</span><button onClick={() => resetGame(difficulty, true)}>{game.ended ? "按当前算法再运行" : "启动系统"}<b>→</b></button></div></div>}
+            <div className="message-bar"><span className={`mini-robot ${active.color}`}>{mode === "auto" ? "AI" : active.shortName}</span><p>{game.message}</p><strong>{mode === "auto" ? `调度 ${game.metrics.replans} 次` : (nearbyStation(active)?.label ?? "移动中")}</strong></div>
+            {!game.running && <div className="start-overlay"><div className="start-card"><p>{game.ended ? "本轮完成" : mode === "auto" ? `策略 ${selectedMethod.code} · 自动调度` : "手动对照"}</p><h2>{game.ended ? `完成 ${game.delivered} 道菜` : mode === "auto" ? selectedMethod.name : "亲自控制两台机器人"}</h2><span>{mode === "auto" ? selectedMethod.note : "使用同一组订单与时间限制，对照人工操作和自动调度。"}</span><button onClick={() => resetGame(difficulty, true)}>{game.ended ? "按当前策略再运行" : "启动系统"}<b>→</b></button></div></div>}
           </div>
         </section>
 
         <aside className="controls-panel panel">
           {mode === "auto" ? <>
-            <div className="panel-title-row"><div><p className="section-kicker">ALGORITHM LAB</p><h2>算法实验台</h2></div><span className="algorithm-pill">{selectedMethod.kind}</span></div>
-            <div className="algorithm-selector" role="radiogroup" aria-label="选择自动调度算法">{ALGORITHM_IDS.map((id) => <button role="radio" aria-checked={algorithm === id} className={algorithm === id ? "active" : ""} key={id} onClick={() => selectAlgorithm(id)}><b>{ALGORITHMS[id].version}</b><span>{ALGORITHMS[id].shortName}</span></button>)}</div>
-            <div className="lab-tabs" role="tablist" aria-label="实验台视图"><button role="tab" aria-selected={labView === "run"} className={labView === "run" ? "active" : ""} onClick={() => setLabView("run")}>实时运行</button><button role="tab" aria-selected={labView === "experiment"} className={labView === "experiment" ? "active" : ""} onClick={() => setLabView("experiment")}>对照实验</button></div>
+            <div className="panel-title-row"><div><p className="section-kicker">SCHEDULING LAB</p><h2>调度实验</h2></div></div>
+            <div className="algorithm-selector" role="radiogroup" aria-label="选择自动调度策略">{ALGORITHM_IDS.map((id) => <button role="radio" aria-checked={algorithm === id} className={algorithm === id ? "active" : ""} key={id} onClick={() => selectAlgorithm(id)}><b>{ALGORITHMS[id].code}</b><span>{ALGORITHMS[id].shortName}</span></button>)}</div>
+            <div className="lab-tabs" role="tablist" aria-label="调度实验视图"><button role="tab" aria-selected={labView === "run"} className={labView === "run" ? "active" : ""} onClick={() => setLabView("run")}>实时运行</button><button role="tab" aria-selected={labView === "experiment"} className={labView === "experiment" ? "active" : ""} onClick={() => setLabView("experiment")}>策略对比</button></div>
             {labView === "run" ? <div className="lab-view">
               <div className="auto-actions"><button className="primary-action auto-button" onClick={() => game.running ? setGame((previous) => ({ ...previous, paused: !previous.paused })) : resetGame(difficulty, true)}><span>{game.running ? (game.paused ? "继续运行" : "暂停运行") : "启动自动调度"}</span><small>{roundSeconds} 秒 · 固定 2 次决策/秒</small><kbd>{game.paused ? "▶" : "Ⅱ"}</kbd></button><div className="speed-picker"><span>播放速度</span><button className={speed === 1 ? "active" : ""} onClick={() => setSpeed(1)}>1×</button><button className={speed === 2 ? "active" : ""} onClick={() => setSpeed(2)}>2×</button></div></div>
               <div className="robot-cards compact">{game.robots.map((robot) => <article key={robot.id} className={`robot-card ${robot.color}`}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>{robot.name} · {itemLabel(robot.carrying)}</small><strong>{robot.task}</strong><em>目标：{robot.target}</em></span><span className="status-dot" /></article>)}</div>
-              <div className="metric-grid"><div><span>移动</span><strong>{game.metrics.travel}</strong><small>格</small></div><div><span>冲突</span><strong>{game.metrics.conflicts}</strong><small>次</small></div><div><span>逾期</span><strong>{game.metrics.tardiness}</strong><small>秒</small></div><div><span>规划</span><strong>{game.metrics.replans}</strong><small>次</small></div></div>
-              <div className="score-rule"><strong>积分怎么计算？</strong><p>准时：100 + 剩余秒数×3 + 连续准时奖励；逾期：100 − 逾期秒数×5，最低 20 分并中断连击。</p></div>
+              <div className="metric-grid"><div><span>移动</span><strong>{game.metrics.travel}</strong><small>格</small></div><div><span>避让</span><strong>{game.metrics.conflicts}</strong><small>次</small></div><div><span>逾期</span><strong>{game.metrics.tardiness}</strong><small>秒</small></div><div><span>调度</span><strong>{game.metrics.replans}</strong><small>次</small></div></div>
             </div> : <div className="experiment-card lab-view">
-              <div className="experiment-fields"><label><span>仿真时长</span><div><input type="number" min="30" max="600" step="10" value={roundSeconds} onChange={(event) => changeDuration(Number(event.target.value))}/><b>秒</b></div></label><label><span>主要评价目标</span><select value={objective} onChange={(event) => { setObjective(event.target.value as ObjectiveId); setExperiment(null); }}>{Object.entries(OBJECTIVES).map(([id, item]) => <option value={id} key={id}>{item.label}</option>)}</select></label></div>
-              <p className="objective-note">{OBJECTIVES[objective].description} 该选择只改变结果排名，不改写策略；所有指标仍会一并记录。</p>
+              <div className="experiment-fields"><label><span>仿真时长</span><div><input aria-label="仿真时长（秒）" type="number" min="30" max="600" step="10" inputMode="numeric" value={durationDraft} onChange={(event) => setDurationDraft(event.target.value)} onBlur={(event) => commitDuration(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}/><b>秒</b></div></label><label><span>排名目标</span><select value={objective} onChange={(event) => changeObjective(event.target.value as ObjectiveId)}>{Object.entries(OBJECTIVES).map(([id, item]) => <option value={id} key={id}>{item.label}</option>)}</select></label></div>
+              <p className="objective-note">{OBJECTIVES[objective].description} 只改变排名，不改变仿真结果。</p>
               <div className="experiment-actions"><button className="run-experiment" disabled={experimentRunning} onClick={runExperiment}>{experimentRunning ? "正在运行…" : "运行三种策略"}</button><button className="export-button" disabled={!experiment} onClick={exportExperiment}>导出 MD</button></div>
-              {experiment ? <><div className="experiment-meta"><span>{experiment.duration}s · {experiment.difficulty === "training" ? "标准到达" : "高峰到达"}</span><strong>按“{OBJECTIVES[experiment.objective].label}”排名</strong></div><div className="experiment-table"><span>#</span><span>策略</span><span>完成</span><span>积分</span><span>逾期</span>{rankedExperiment.map((result, index) => <button key={result.algorithm} onClick={() => { selectAlgorithm(result.algorithm); setLabView("run"); }}><i>{index + 1}</i><b>{ALGORITHMS[result.algorithm].version}</b><strong>{result.delivered}</strong><em>{result.score}</em><small>{result.tardiness}s</small><p>{result.sequence || "暂无交付"}</p></button>)}</div></> : <div className="empty-experiment"><b>尚未运行</b><span>设置时长和目标后，页面才会计算并记录结果。</span></div>}
-              <details className="score-details"><summary>查看完整积分与目标定义</summary><p>准时交付 = 100 + 剩余秒数×3 + 连击奖励；连续准时每单增加 25 分，最高 100 分。逾期每秒扣 5 分，单笔最低 20 分，连击归零。完成量、积分、累计逾期和移动量是彼此独立的评价指标。</p></details>
+              {experiment ? <><div className="experiment-meta"><span>{experiment.duration} 秒 · {experiment.difficulty === "training" ? "标准压力" : "高峰压力"}</span><strong>{OBJECTIVES[experiment.objective].label}</strong></div><div className="experiment-results" aria-label="策略实验排名">{rankedExperiment.map((result, index) => <button className="experiment-result" key={result.algorithm} onClick={() => { selectAlgorithm(result.algorithm); setLabView("run"); }}><i>{index + 1}</i><b>策略 {ALGORITHMS[result.algorithm].code}<small>{ALGORITHMS[result.algorithm].shortName}</small></b><span><small>完成</small><strong>{result.delivered}</strong></span><span><small>积分</small><strong>{result.score}</strong></span><span><small>逾期</small><strong>{result.tardiness}s</strong></span><span><small>移动</small><strong>{result.travel}</strong></span></button>)}</div></> : <div className="empty-experiment"><b>尚未运行</b><span>设置时长和目标，再运行三种策略。</span></div>}
+              <details className="score-details"><summary>积分与目标定义</summary><p>准时交付 = 100 + 剩余秒数×3 + 连击奖励；连续准时每单增加 25 分，最高 100 分。逾期每秒扣 5 分，单笔最低 20 分，连击归零。完成量、积分、累计逾期和移动量彼此独立。</p></details>
             </div>}
-            <details className="method-details"><summary>查看 {selectedMethod.version} 算法逻辑 <span>＋</span></summary><div className="method-card"><p>{selectedMethod.version} · {selectedMethod.kind.toUpperCase()}</p><strong>{selectedMethod.name}</strong><ol>{selectedMethod.steps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}</ol><em>{selectedMethod.note}</em></div></details>
+            <details className="method-details"><summary>策略 {selectedMethod.code} · 调度逻辑 <span>＋</span></summary><div className="method-card"><p>策略 {selectedMethod.code} · {selectedMethod.kind}</p><strong>{selectedMethod.name}</strong><ol>{selectedMethod.steps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}</ol><em>{selectedMethod.note}</em></div></details>
           </> : <>
             <div className="panel-title-row"><div><p className="section-kicker">MANUAL MODE</p><h2>手动体验</h2></div><span className="team-count">对照组</span></div>
             <div className="robot-cards">{game.robots.map((robot) => <button key={robot.id} className={`robot-card ${robot.color} ${game.activeRobot === robot.id ? "active" : ""}`} onClick={() => setGame((previous) => ({ ...previous, activeRobot: robot.id }))}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>机器人 {robot.shortName}</small><strong>{robot.name}</strong><em>{itemLabel(robot.carrying)}</em></span></button>)}</div>
@@ -1121,7 +1130,7 @@ export default function Home() {
           </>}
         </aside>
       </section>
-      <footer><span><i /> 三策略多目标离散事件仿真</span><p>原创程序化配乐 · 仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
+      <footer><span><i /> 3 种策略 · 5 项目标 · 离散事件仿真</span><p>原创程序化配乐 · 仅供学习与研究，禁止商用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用告知</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
     </main>
   );
 }

@@ -14,6 +14,10 @@ test("the kitchen grid has immutable row and column tracks", () => {
   assert.match(page, /className="algorithm-selector"/);
   assert.match(page, /运行三种策略/);
   assert.match(page, /导出 MD/);
+  assert.match(page, /className="experiment-result"/);
+  assert.match(page, /<small>移动<\/small>/);
+  assert.match(page, /只改变排名，不改变仿真结果/);
+  assert.doesNotMatch(page, /算法实验台|标准到达|高峰到达|移动利用率/);
 });
 
 test("repository declares noncommercial licensing and usage notification", () => {
