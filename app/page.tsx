@@ -7,6 +7,7 @@ type RecipeId = "tomato-soup" | "mushroom-soup" | "garden-stew";
 type Mode = "auto" | "manual";
 type Difficulty = "training" | "rush";
 type AlgorithmId = "baseline" | "pipeline" | "dual";
+type PageView = "simulator" | "model";
 type LabView = "run" | "experiment";
 type ObjectiveId = "throughput" | "score" | "tardiness" | "travel" | "balanced";
 type CarryItem =
@@ -870,7 +871,7 @@ function experimentMarkdown(batch: ExperimentBatch) {
   const pressure = batch.difficulty === "training" ? "标准压力" : "高峰压力";
   const ranked = [...batch.results].sort((a, b) => compareResults(a, b, batch.objective));
   const rows = ranked.map((result, index) => `| ${index + 1} | ${ALGORITHMS[result.algorithm].code} | ${ALGORITHMS[result.algorithm].name} | ${result.delivered} | ${result.score} | ${result.tardiness} | ${result.travel} | ${result.idle} | ${result.conflicts} | ${result.replans} | ${result.sequence || "—"} |`).join("\n");
-  return `# Robo Kitchen 实验报告\n\n- 生成时间：${batch.createdAt}\n- 仿真时长：${batch.duration} 秒\n- 订单压力：${pressure}\n- 主要评价目标：${OBJECTIVES[batch.objective].label}（${OBJECTIVES[batch.objective].direction}）\n- 决策频率：2 次 / 仿真秒\n- 初始条件：相同地图、机器人位置与确定性订单队列\n\n> 本报告由页面按当前参数运行后生成，不是预先写入的结果。速度按钮只改变播放速度，不改变每个仿真秒的决策次数。\n\n## 积分规则\n\n- 准时交付：100 基础分 + 剩余秒数 × 3 + 连续准时奖励（每单 +25，最高 +100）。\n- 逾期交付：100 基础分 − 逾期秒数 × 5，单笔最低 20 分，并中断连续准时奖励。\n- 积分不会替代其他目标；报告同时保留完成量、逾期和移动量。\n\n| 排名 | 策略 | 方法 | 完成 | 得分 | 逾期(s) | 移动(格) | 空闲步 | 避让 | 调度 | 交付顺序 |\n| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows}\n\n## 策略说明\n\n${ranked.map((result) => `### 策略 ${ALGORITHMS[result.algorithm].code} · ${ALGORITHMS[result.algorithm].name}\n\n${ALGORITHMS[result.algorithm].note}`).join("\n\n")}\n\n## 后续扩展\n\n当前三种菜名共享同一类两原料工序。后续版本可加入不同工序长度、菜谱、地图和设备布局，但不属于本次实验。\n\n---\nRobo Kitchen · 非商用教学与研究项目\n`;
+  return `# Robo Kitchen 实验报告\n\n- 生成时间：${batch.createdAt}\n- 仿真时长：${batch.duration} 秒\n- 订单压力：${pressure}\n- 主要评价目标：${OBJECTIVES[batch.objective].label}（${OBJECTIVES[batch.objective].direction}）\n- 决策频率：2 次 / 仿真秒\n- 初始条件：相同地图、机器人位置与确定性订单队列\n\n> 本报告由页面按当前参数运行后生成，不是预先写入的结果。速度按钮只改变播放速度，不改变每个仿真秒的决策次数。\n\n## 模型口径\n\n- 集合：机器人 R={A,B}；动态订单队列 O_t；可行走格点 V 与四邻接边 E；工位集合 K。\n- 关键参数：实验时长 H=${batch.duration}；订单时限 D_i=${batch.difficulty === "training" ? 70 : 46} 秒；切配 3 次动作；烹饪 ${batch.difficulty === "training" ? 8 : 11} 秒。\n- 完成量：Q = Σ_i y_i。\n- 累计逾期：T = Σ_i y_i max(0, C_i-d_i)。\n- 移动量：M = Σ_{r,t} ||p_{r,t+1}-p_{r,t}||_1。\n- 综合目标：lex max (Q, -T, S, -M)，依次比较，不做加权求和。\n- 约束：四方向移动与机器人避碰；每台机器人每步至多执行一个任务；每口灶至多处理一个订单；取料→切配→入锅→烹饪→装盘→交付。\n\n> 当前 A/B/C 是固定在线启发式。页面选择的评价目标只改变实验结果排名，不会针对该目标重新训练或求解策略。\n\n## 积分规则\n\n- 准时交付：100 基础分 + 剩余秒数 × 3 + 连续准时奖励（每单 +25，最高 +100）。\n- 逾期交付：100 基础分 − 逾期秒数 × 5，单笔最低 20 分，并中断连续准时奖励。\n- 积分不会替代其他目标；报告同时保留完成量、逾期和移动量。\n\n| 排名 | 策略 | 方法 | 完成 | 得分 | 逾期(s) | 移动(格) | 空闲步 | 避让 | 调度 | 交付顺序 |\n| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows}\n\n## 策略说明\n\n${ranked.map((result) => `### 策略 ${ALGORITHMS[result.algorithm].code} · ${ALGORITHMS[result.algorithm].name}\n\n${ALGORITHMS[result.algorithm].note}`).join("\n\n")}\n\n## 后续扩展\n\n当前三种菜名共享同一类两原料工序。后续版本可加入不同工序长度、菜谱、地图和设备布局，但不属于本次实验。\n\n---\nRobo Kitchen · 非商用教学与研究项目\n`;
 }
 function formatTime(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 
@@ -910,7 +911,124 @@ function startKitchenAudio(): KitchenAudio {
   };
 }
 
+function ModelView() {
+  return (
+    <section className="model-view" aria-labelledby="model-title">
+      <header className="model-hero">
+        <div>
+          <p className="section-kicker">MODEL &amp; POLICY</p>
+          <h2 id="model-title">从厨房动画到在线调度模型</h2>
+          <p>系统每个决策步读取订单、机器人和工位状态，再决定“做哪一单、谁去做、使用哪个工位、下一步走到哪里”。数学模型定义问题边界，A/B/C 是三种在线启发式策略。</p>
+        </div>
+        <span className="model-badge">启发式仿真 · 非全局优化器</span>
+        <div className="model-facts" aria-label="模型摘要">
+          <span><b>9 × 8</b> 固定网格</span><span><b>2</b> 台机器人</span><span><b>2</b> 个切配台</span><span><b>2</b> 口灶</span><span><b>2</b> 次决策 / 秒</span>
+        </div>
+      </header>
+
+      <div className="model-section-grid">
+        <article className="model-card">
+          <div className="model-card-heading"><i>1</i><div><span>SETS</span><h3>集合</h3></div></div>
+          <dl className="definition-list">
+            <div><dt>R</dt><dd>机器人集合 {"{A, B}"}</dd></div>
+            <div><dt>O / O<sub>t</sub></dt><dd>实验内释放的全部订单 / 时刻 t 的 3 个在队订单</dd></div>
+            <div><dt>V, E</dt><dd>可行走格点与四邻接边</dd></div>
+            <div><dt>K</dt><dd>切配台、灶台、传菜台、餐盘与出餐口</dd></div>
+            <div><dt>G<sub>i</sub></dt><dd>订单 i 所需的两份原料任务</dd></div>
+          </dl>
+        </article>
+
+        <article className="model-card">
+          <div className="model-card-heading"><i>2</i><div><span>PARAMETERS</span><h3>参数</h3></div></div>
+          <dl className="definition-list">
+            <div><dt>H</dt><dd>实验时长，30–600 秒</dd></div>
+            <div><dt>D<sub>i</sub></dt><dd>订单时限：标准 70 秒；高峰 46 秒</dd></div>
+            <div><dt>τ<sub>cut</sub></dt><dd>每份原料需 3 次切配动作</dd></div>
+            <div><dt>τ<sub>cook</sub></dt><dd>烹饪时间：标准 8 秒；高峰 11 秒</dd></div>
+            <div><dt>δ(p, s)</dt><dd>从位置 p 到工位 s 相邻服务格的 BFS 距离</dd></div>
+          </dl>
+        </article>
+
+        <article className="model-card wide">
+          <div className="model-card-heading"><i>3</i><div><span>ONLINE DECISIONS &amp; STATE</span><h3>在线决策与状态变量</h3></div></div>
+          <div className="variable-grid">
+            <div><code>p<sub>rt</sub></code><p>机器人 r 在决策步 t 所在的网格坐标。</p><small>页面：机器人位置</small></div>
+            <div><code>x<sub>rijt</sub></code><p>若机器人 r 在 t 执行订单 i 的任务 j，则为 1。</p><small>代码：job.robotId</small></div>
+            <div><code>z<sub>ikt</sub></code><p>若订单 i 在 t 占用灶台 k，则为 1。</p><small>代码：plan.potKey</small></div>
+            <div><code>u<sub>ijt</sub></code><p>原料任务的工序状态：取料、切配、入锅或完成。</p><small>代码：job.stage</small></div>
+            <div><code>y<sub>i</sub></code><p>订单 i 是否在实验时限 H 内完成交付。</p><small>页面：完成订单</small></div>
+            <div><code>C<sub>i</sub></code><p>订单 i 的交付时刻；用于计算准时、逾期与积分。</p><small>页面：逾期 / 团队得分</small></div>
+          </div>
+          <p className="model-clarifier">这些符号用于准确描述页面正在做的在线决策，并不是预先建立后交给 MILP 求解器的一组静态变量。</p>
+        </article>
+      </div>
+
+      <article className="model-card constraints-card">
+        <div className="model-card-heading"><i>4</i><div><span>CONSTRAINTS</span><h3>核心约束</h3></div></div>
+        <div className="constraint-grid">
+          <div><b>棋盘移动与避碰</b><div className="formula-line" aria-label="下一位置只能停留或移动到四邻接格，两个机器人不能占据同一格">p<sub>r,t+1</sub> ∈ N(p<sub>rt</sub>) ∪ {"{"}p<sub>rt</sub>{"}"}<br/>p<sub>At</sub> ≠ p<sub>Bt</sub></div><p>不能斜走、穿墙或进入工位格；每步还会预留目标格，避免同时相撞。</p></div>
+          <div><b>机器人与设备容量</b><div className="formula-line" aria-label="每台机器人每步至多执行一个任务，每口灶至多处理一个订单">∑<sub>i,j</sub> x<sub>rijt</sub> ≤ 1<br/>∑<sub>i</sub> z<sub>ikt</sub> ≤ 1</div><p>机器人一次只携带一件物品；切配台、传菜位和灶台各有独立占用状态。</p></div>
+          <div><b>工序先后关系</b><div className="formula-line sequence-formula" aria-label="取料之后切配，切配之后入锅，之后烹饪、装盘和交付">取料 ≺ 切配 ≺ 入锅 ≺ 烹饪 ≺ 装盘 ≺ 交付</div><p>每锅必须集齐两份已切原料才开始烹饪，成品必须配有餐盘才能交付。</p></div>
+          <div><b>订单时间</b><div className="formula-line" aria-label="逾期等于交付时间减截止时间与零的最大值">L<sub>i</sub> = max(0, C<sub>i</sub> − d<sub>i</sub>)<br/>d<sub>i</sub> = r<sub>i</sub> + D<sub>i</sub></div><p>rᵢ 是订单进入队列的时刻；交付后立即补入新订单，因此队列始终保持 3 单。</p></div>
+        </div>
+      </article>
+
+      <article className="model-card objectives-card">
+        <div className="model-card-heading"><i>5</i><div><span>OBJECTIVES</span><h3>评价目标与积分</h3></div></div>
+        <p className="model-intro">实验对同一初始状态分别运行三种固定策略，再按所选目标排序。目标选择不会反过来修改策略，只影响结果名次。</p>
+        <div className="objective-formulas">
+          <div><span>完成量</span><div className="formula-line">Q = ∑<sub>i∈O</sub> y<sub>i</sub></div><small>越大越好</small></div>
+          <div><span>累计逾期</span><div className="formula-line">T = ∑<sub>i∈O</sub> y<sub>i</sub>L<sub>i</sub></div><small>越小越好</small></div>
+          <div><span>移动量</span><div className="formula-line">M = ∑<sub>r,t</sub> ‖p<sub>r,t+1</sub>−p<sub>rt</sub>‖<sub>1</sub></div><small>越小越好</small></div>
+          <div><span>综合排序</span><div className="formula-line">lex max (Q, −T, S, −M)</div><small>依次比较，不做加权求和</small></div>
+        </div>
+        <details className="formula-details" open>
+          <summary>积分函数 S = ∑ g<sub>i</sub></summary>
+          <div className="score-formula">
+            <div><b>准时</b><span>g<sub>i</sub> = 100 + 3(d<sub>i</sub>−C<sub>i</sub>) + 25 min(k<sub>i</sub>−1, 4)</span></div>
+            <div><b>逾期</b><span>g<sub>i</sub> = max(20, 100 − 5L<sub>i</sub>)</span></div>
+          </div>
+          <p>kᵢ 是截至订单 i 的连续准时交付次数；连击每单增加 25 分、最高 100 分，逾期后归零。未匹配订单的兜底交付为 60 分，但自动策略正常情况下按订单编号匹配。</p>
+        </details>
+      </article>
+
+      <article className="model-card policy-card">
+        <div className="model-card-heading"><i>6</i><div><span>ROUTING &amp; POLICIES</span><h3>路径与三种调度策略</h3></div></div>
+        <div className="policy-flow">
+          <section>
+            <header><i>0</i><div><b>公共路径层</b><span>BFS 最短可行路</span></div></header>
+            <p>所有策略使用同一个四邻接路网。机器人每个决策步沿当前最短路前进一步。</p>
+            <details className="formula-details"><summary>查看路径公式</summary><div className="formula-line">δ(p,s) = min<sub>P∈𝒫(p,N(s))</sub> |P|</div><p>N(s) 是工位 s 周围可操作的相邻格；另一机器人和本步已预留格会临时从路网中移除。</p></details>
+          </section>
+          <section>
+            <header><i>A</i><div><b>顺序 EDF 基线</b><span>基准启发式</span></div></header>
+            <p>选剩余时间最少的订单；固定阿橙/左切配台与小青/右切配台；当前订单交付后才处理下一单。</p>
+            <details className="formula-details"><summary>查看选择规则</summary><div className="formula-line">i* = arg min<sub>i∈O<sub>t</sub></sub> (q<sub>i</sub>(t), i)</div><p>qᵢ(t)=dᵢ−t 是当前剩余时限；订单编号用于确定性破同。</p></details>
+          </section>
+          <section>
+            <header><i>B</i><div><b>流水竞价协作</b><span>单灶分配启发式</span></div></header>
+            <p>仍按 EDF 选单，但枚举两份原料与两个切配台的分配；烹饪期间预切下一单的一份原料并存入传菜台。</p>
+            <details className="formula-details"><summary>查看分配成本</summary><div className="formula-line compact-formula">c(r,g,b,k)=δ(p<sub>r</sub>,s<sub>g</sub>)+δ(s<sub>g</sub>,b)+δ(b,k)<br/>(σ*,β*)=arg min ∑<sub>r∈R</sub>c(r,σ<sub>r</sub>,β<sub>r</sub>,k)</div><p>σ 是原料分配，β 是切配台分配；页面枚举所有 2×2 组合并取总移动距离最小者。</p></details>
+          </section>
+          <section>
+            <header><i>C</i><div><b>滚动双灶调度</b><span>资源感知启发式</span></div></header>
+            <p>对当前最多 3 个订单精确枚举顺序，填满两口空闲灶；机器人按距离与工位状态动态接任务，并提前把餐盘送到灶旁。</p>
+            <details className="formula-details"><summary>查看滚动排序</summary><div className="formula-line compact-formula">π* = arg min<sub>π∈Π(O<sub>t</sub>)</sub> ∑<sub>h</sub>[25 max(0, Ĉ<sub>πh</sub>−q<sub>πh</sub>) + Ĉ<sub>πh</sub>]</div><p>Ĉ 是从当前时刻起的估计完成时间：田园炖菜 19、番茄汤 21、蘑菇汤 22 个估计单位，换菜加 2；这是小窗口排序代理，不是仿真真实加工时长。</p></details>
+            <details className="formula-details"><summary>查看机器人接单分数</summary><div className="formula-line compact-formula">h(r,i,j)=δ(p<sub>r</sub>,s<sub>j</sub>)+14I<sub>active(i)</sub>+0.04q<sub>i</sub></div><p>分数越小越优；14 鼓励两台机器人分散到不同在制订单，0.04qᵢ 让临期订单更优先。</p></details>
+          </section>
+        </div>
+      </article>
+
+      <aside className="model-boundary">
+        <b>模型边界</b>
+        <p>这是确定性订单流上的离散时间仿真与在线启发式比较。A/B/C 没有针对每个实验目标重新训练或求解，因此结果只说明这些固定策略在当前地图、时限和工序参数下的表现；它不宣称全局最优，也不直接代表真实厨房机器人控制器。</p>
+      </aside>
+    </section>
+  );
+}
+
 export default function Home() {
+  const [pageView, setPageView] = useState<PageView>("simulator");
   const [mode, setMode] = useState<Mode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("training");
   const [algorithm, setAlgorithm] = useState<AlgorithmId>("dual");
@@ -930,7 +1048,7 @@ export default function Home() {
     tickRef.current = 0;
     setGame(createInitialState(nextDifficulty, start, duration));
   }, [difficulty, roundSeconds]);
-  const selectMode = (nextMode: Mode) => { setMode(nextMode); resetGame(difficulty); };
+  const selectMode = (nextMode: Mode) => { setPageView("simulator"); setMode(nextMode); resetGame(difficulty); };
   const selectAlgorithm = (nextAlgorithm: AlgorithmId) => {
     setAlgorithm(nextAlgorithm);
     resetGame(difficulty);
@@ -1058,14 +1176,15 @@ export default function Home() {
     <main className="game-shell">
       <header className="topbar">
         <div className="brand-lockup"><div className="brand-mark"><span>R</span><span>K</span></div><div><p className="eyebrow">AUTONOMOUS GRID KITCHEN</p><h1>ROBO KITCHEN <span>双机器人协作调度</span></h1></div></div>
-        <div className="mode-tabs" role="tablist" aria-label="运行模式">
-          <button role="tab" aria-selected={mode === "auto"} className={mode === "auto" ? "active" : ""} onClick={() => selectMode("auto")}><i>✦</i> 自动调度</button>
-          <button role="tab" aria-selected={mode === "manual"} className={mode === "manual" ? "active" : ""} onClick={() => selectMode("manual")}><i>✥</i> 手动体验</button>
+        <div className="mode-tabs" role="tablist" aria-label="页面视图">
+          <button role="tab" aria-selected={pageView === "simulator" && mode === "auto"} className={pageView === "simulator" && mode === "auto" ? "active" : ""} onClick={() => selectMode("auto")}><i>✦</i> 自动调度</button>
+          <button role="tab" aria-selected={pageView === "simulator" && mode === "manual"} className={pageView === "simulator" && mode === "manual" ? "active" : ""} onClick={() => selectMode("manual")}><i>✥</i> 手动体验</button>
+          <button role="tab" aria-selected={pageView === "model"} className={pageView === "model" ? "active" : ""} onClick={() => setPageView("model")}><i>∑</i> 模型与算法</button>
         </div>
         <div className="top-actions"><button className={`music-button ${musicOn ? "active" : ""}`} aria-label={musicOn ? "关闭音乐" : "开启音乐"} aria-pressed={musicOn} onClick={toggleMusic} title="原创程序化厨房配乐"><span aria-hidden>{musicOn ? "♫" : "♪"}</span><span className="music-label">{musicOn ? "音乐开" : "音乐关"}</span></button><button className="restart-button" onClick={() => resetGame(difficulty, true)}>重新开始</button></div>
       </header>
 
-      <section className="score-strip" aria-label="运行指标">
+      {pageView === "simulator" ? <><section className="score-strip" aria-label="运行指标">
         <div><span>剩余时间</span><strong className={game.timeLeft <= 20 ? "danger" : ""}>{formatTime(game.timeLeft)}</strong></div>
         <div><span>完成订单</span><strong>{game.delivered}</strong></div>
         <div><span>团队得分</span><strong>{game.score.toLocaleString()}</strong></div>
@@ -1129,7 +1248,7 @@ export default function Home() {
             <div className="method-card manual-note"><p>为什么保留手动模式？</p><strong>它是自动调度的直观基准</strong><em>同样的订单、厨房与时间限制下，可以比较人工决策与算法策略的完成量、移动距离和等待。</em></div>
           </>}
         </aside>
-      </section>
+      </section></> : <ModelView />}
       <footer><span><i /> 3 种策略 · 5 项目标 · 离散事件仿真</span><p>原创程序化配乐 · 仅供学习与研究，禁止商用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用告知</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
     </main>
   );

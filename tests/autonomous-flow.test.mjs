@@ -17,6 +17,11 @@ test("the kitchen grid has immutable row and column tracks", () => {
   assert.match(page, /className="experiment-result"/);
   assert.match(page, /<small>移动<\/small>/);
   assert.match(page, /只改变排名，不改变仿真结果/);
+  assert.match(page, /模型与算法/);
+  assert.match(page, /在线决策与状态变量/);
+  assert.match(page, /lex max \(Q, −T, S, −M\)/);
+  assert.match(page, /启发式仿真 · 非全局优化器/);
+  assert.match(page, /δ\(p,s\) = min/);
   assert.doesNotMatch(page, /算法实验台|标准到达|高峰到达|移动利用率/);
 });
 
@@ -39,6 +44,7 @@ function loadSimulationHarness() {
   const pageSource = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const pureSource = pageSource
     .slice(0, pageSource.indexOf("export default function Home"))
+    .replace(/\nfunction ModelView\(\)[\s\S]*$/, "")
     .replace(/^"use client";\s*/m, "")
     .replace(/^import .*?;\s*/m, "");
   const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runSimulation, experimentMarkdown, deliveryReward, exactWindowSequence, ALGORITHM_IDS };`;
@@ -146,5 +152,8 @@ test("Markdown report contains parameters, objectives, score formula and all met
   assert.match(markdown, /仿真时长：90 秒/);
   assert.match(markdown, /主要评价目标：综合字典序/);
   assert.match(markdown, /逾期秒数 × 5/);
+  assert.match(markdown, /## 模型口径/);
+  assert.match(markdown, /lex max \(Q, -T, S, -M\)/);
+  assert.match(markdown, /固定在线启发式/);
   assert.match(markdown, /\| 排名 \| 策略 \| 方法 \| 完成 \| 得分 \|/);
 });
