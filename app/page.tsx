@@ -6,7 +6,9 @@ type Ingredient = "tomato" | "mushroom";
 type RecipeId = "tomato-soup" | "mushroom-soup" | "garden-stew";
 type Mode = "auto" | "manual";
 type Difficulty = "training" | "rush";
-type AlgorithmId = "v1" | "v2" | "v3" | "v4" | "v5";
+type AlgorithmId = "baseline" | "pipeline" | "dual";
+type LabView = "run" | "experiment";
+type ObjectiveId = "throughput" | "score" | "tardiness" | "travel" | "balanced";
 type CarryItem =
   | { kind: "raw"; ingredient: Ingredient }
   | { kind: "chopped"; ingredient: Ingredient }
@@ -103,7 +105,7 @@ type Station =
 
 const ROWS = 8;
 const COLS = 9;
-const ROUND_SECONDS = 120;
+const DEFAULT_ROUND_SECONDS = 120;
 const DIRECTIONS = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
 const RECIPES: Record<RecipeId, { name: string; shortName: string; icon: string; ingredients: [Ingredient, Ingredient]; color: string }> = {
   "tomato-soup": { name: "双番茄浓汤", shortName: "番茄汤", icon: "🍅", ingredients: ["tomato", "tomato"], color: "#ef6a54" },
@@ -111,48 +113,39 @@ const RECIPES: Record<RecipeId, { name: string; shortName: string; icon: string;
   "garden-stew": { name: "田园双拼炖菜", shortName: "双拼炖菜", icon: "🥘", ingredients: ["tomato", "mushroom"], color: "#e49c3f" },
 };
 const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName: string; kind: string; steps: string[]; note: string }> = {
-  v1: {
-    version: "V1",
+  baseline: {
+    version: "A · 基线",
     name: "顺序 EDF 基线",
     shortName: "顺序基线",
     kind: "基准启发式",
     steps: ["最早截止订单优先", "单个订单内双机器人并行", "固定切配角色 + BFS 最短路", "交付后才启动下一订单"],
     note: "一次只处理一道菜，是后续策略的可复现实验基线。",
   },
-  v2: {
-    version: "V2",
-    name: "跨订单流水调度",
-    shortName: "流水备料",
-    kind: "流水启发式",
-    steps: ["沿用最早截止订单优先", "当前菜烹饪时预取下一单", "切好原料暂存于传菜台", "交付后直接衔接已备原料"],
-    note: "把烹饪等待转化为下一订单的准备时间，减少跨订单空档。",
-  },
-  v3: {
-    version: "V3",
-    name: "距离竞价协作调度",
-    shortName: "任务竞价",
+  pipeline: {
+    version: "B · 流水",
+    name: "流水竞价协作调度",
+    shortName: "流水竞价",
     kind: "分配启发式",
-    steps: ["保留 V2 跨订单流水", "机器人对原料任务提交距离成本", "枚举两种原料与切配台分工", "选择总预计移动最短的分配"],
-    note: "角色不再固定；竞价只优化当前任务分配，不声称全局最优。",
+    steps: ["最早截止订单优先", "烹饪时预备下一单", "按距离竞价分配机器人", "切好原料暂存于传菜台"],
+    note: "合并原 V2 流水备料与 V3 距离竞价，作为单灶协作策略。",
   },
-  v4: {
-    version: "V4",
-    name: "小窗口穷举优化",
-    shortName: "滚动穷举",
-    kind: "精确子问题",
-    steps: ["枚举当前三单的全部顺序", "评估完工、逾期与换型代价", "结合 V3 距离竞价分工", "每次交付后重新求解窗口"],
-    note: "对当前简化的三订单排序子问题精确；不代表完整厨房仿真的全局最优解。",
-  },
-  v5: {
-    version: "V5",
-    name: "资源感知双灶调度",
+  dual: {
+    version: "C · 双灶",
+    name: "滚动双灶资源调度",
     shortName: "双灶协同",
     kind: "资源感知启发式",
-    steps: ["两口灶同时承接不同订单", "空盘提前放到对应灶台旁", "等待烹饪时继续切下一单", "机器人按距离与工位状态动态接活"],
-    note: "把等待时间变成移动和备料时间；双灶、盘子、切配台与机器人统一参与滚动决策。",
+    steps: ["滚动评估当前订单窗口", "两口灶同时承接不同订单", "空盘提前放到对应灶台旁", "空闲机器人继续准备后续订单"],
+    note: "合并原 V4 滚动排序与 V5 资源调度，是当前最完整的双灶策略。",
   },
 };
 const ALGORITHM_IDS = Object.keys(ALGORITHMS) as AlgorithmId[];
+const OBJECTIVES: Record<ObjectiveId, { label: string; direction: string; description: string }> = {
+  throughput: { label: "最大完成量", direction: "越大越好", description: "优先比较时限内完成的订单数。" },
+  score: { label: "最大积分", direction: "越大越好", description: "比较交付基础分、准时奖励与连击奖励之和。" },
+  tardiness: { label: "最小逾期", direction: "越小越好", description: "比较所有已交付订单的累计逾期秒数。" },
+  travel: { label: "最少移动", direction: "越小越好", description: "比较两台机器人累计移动格数。" },
+  balanced: { label: "综合字典序", direction: "依次判定", description: "先最大完成量，再最小逾期、最大积分、最少移动。" },
+};
 const STATIONS: Record<string, Station> = {
   "0-2": { type: "ingredient", ingredient: "tomato", label: "番茄", icon: "🍅" },
   "0-6": { type: "ingredient", ingredient: "mushroom", label: "蘑菇", icon: "🍄" },
@@ -206,7 +199,7 @@ function makeOrder(id: number, difficulty: Difficulty): Order {
   const maxTime = difficulty === "training" ? 70 : 46;
   return { id, recipe, remaining: maxTime, maxTime };
 }
-function createInitialState(difficulty: Difficulty, running = false): GameState {
+function createInitialState(difficulty: Difficulty, running = false, duration = DEFAULT_ROUND_SECONDS): GameState {
   return {
     robots: [
       { id: 0, name: "阿橙", shortName: "A", color: "coral", row: 2, col: 5, carrying: null, task: "等待任务", target: "—" },
@@ -217,7 +210,7 @@ function createInitialState(difficulty: Difficulty, running = false): GameState 
     pots: { "left-pot": { ingredients: [], recipe: null, cookLeft: 0, ready: false }, "right-pot": { ingredients: [], recipe: null, cookLeft: 0, ready: false } },
     counters: { "pass-top": null, "pass-bottom": null },
     orders: [makeOrder(1, difficulty), makeOrder(2, difficulty), makeOrder(3, difficulty)], history: [],
-    score: 0, delivered: 0, combo: 0, timeLeft: ROUND_SECONDS, running, paused: false, ended: false,
+    score: 0, delivered: 0, combo: 0, timeLeft: duration, running, paused: false, ended: false,
     message: running ? "调度器启动，正在读取订单队列。" : "系统就绪，启动后由算法自动完成全部任务。",
     decision: "等待订单触发滚动规划。", nextOrderId: 4, lastRecipe: null, cycle: null, prefetch: null, smartPlans: [],
     metrics: { travel: 0, idle: 0, conflicts: 0, replans: 0, tardiness: 0 },
@@ -295,7 +288,7 @@ function assignmentCost(robot: Robot, ingredient: Ingredient, boardStation: Boar
     + stationToStationDistance(boardStation, potStation);
 }
 function makeAssignedJobs(game: GameState, ingredients: [Ingredient, Ingredient], algorithm: AlgorithmId, potStation: "4-0" | "4-8"): [PrepJob, PrepJob] {
-  if (algorithm === "v1" || algorithm === "v2") {
+  if (algorithm === "baseline") {
     return [
       { ingredient: ingredients[0], stage: "fetch", robotId: 0, boardKey: "left-cut", boardStation: "2-0" },
       { ingredient: ingredients[1], stage: "fetch", robotId: 1, boardKey: "right-cut", boardStation: "2-8" },
@@ -350,7 +343,6 @@ function selectOrder(game: GameState, algorithm: AlgorithmId, excluded = new Set
     const committed = available.find((order) => order.id === game.prefetch?.orderId);
     if (committed) return committed;
   }
-  if (algorithm === "v4") return exactWindowSequence(available, game.lastRecipe)[0] ?? null;
   return [...available].sort((a, b) => a.remaining - b.remaining || a.id - b.id)[0];
 }
 function startCycle(game: GameState, algorithm: AlgorithmId) {
@@ -360,19 +352,6 @@ function startCycle(game: GameState, algorithm: AlgorithmId) {
   const staged = game.prefetch?.orderId === selected.id ? game.prefetch : null;
   let potKey: "left-pot" | "right-pot" = "left-pot";
   let potStation: "4-0" | "4-8" = "4-0";
-  if (algorithm === "v4") {
-    const candidates = ([
-      ["left-pot", "4-0"],
-      ["right-pot", "4-8"],
-    ] as const).map(([candidateKey, candidateStation]) => {
-      const candidateJobs = makeAssignedJobs(game, ingredients, algorithm, candidateStation);
-      const prepCost = candidateJobs.reduce((sum, job) => sum + assignmentCost(game.robots[job.robotId], job.ingredient, job.boardStation, candidateStation), 0);
-      const serveCost = stationToStationDistance("7-2", candidateStation) + stationToStationDistance(candidateStation, "7-6");
-      return { key: candidateKey, station: candidateStation, cost: prepCost + serveCost };
-    }).sort((a, b) => a.cost - b.cost || a.key.localeCompare(b.key));
-    potKey = candidates[0].key;
-    potStation = candidates[0].station;
-  }
   let jobs: [PrepJob, PrepJob];
   if (staged) {
     const remaining = [...ingredients];
@@ -391,12 +370,9 @@ function startCycle(game: GameState, algorithm: AlgorithmId) {
   }
   game.cycle = { orderId: selected.id, recipe: selected.recipe, phase: "prep", jobs, potKey, potStation, serverId: 1, prefetcherId: 0 };
   game.metrics.replans += 1;
-  if (algorithm === "v4") {
-    const sequence = exactWindowSequence(game.orders, game.lastRecipe).map((order) => `#${order.id}`).join(" → ");
-    game.decision = `穷举当前订单窗口，选择序列 ${sequence}；执行首单 #${selected.id}，使用${potKey === "left-pot" ? "左" : "右"}灶。`;
-  } else if (staged) {
+  if (staged) {
     game.decision = `接续 #${selected.id} 的跨订单预备原料，并行完成剩余备料。`;
-  } else if (algorithm === "v3") {
+  } else if (algorithm === "pipeline") {
     game.decision = `选择 #${selected.id}，按预计移动距离竞价分配原料与切配台。`;
   } else {
     game.decision = `选择剩余时间最短的 #${selected.id} ${RECIPES[selected.recipe].shortName}；两份原料并行处理。`;
@@ -405,16 +381,14 @@ function startCycle(game: GameState, algorithm: AlgorithmId) {
   game.message = `${ALGORITHMS[algorithm].version} 规划 #${selected.id}：阿橙负责${ingredientName(robotJobs[0].ingredient)}，小青负责${ingredientName(robotJobs[1].ingredient)}。`;
 }
 function startPrefetch(game: GameState, algorithm: AlgorithmId) {
-  if (!game.cycle || game.prefetch || algorithm === "v1") return;
+  if (!game.cycle || game.prefetch || algorithm === "baseline") return;
   const selected = selectOrder(game, algorithm, new Set([game.cycle.orderId]));
   if (!selected) return;
   const ingredients = RECIPES[selected.recipe].ingredients;
   const prefetcherId = game.cycle.prefetcherId;
   const boardKey: BoardKey = prefetcherId === 0 ? "left-cut" : "right-cut";
   const boardStation: BoardStation = prefetcherId === 0 ? "2-0" : "2-8";
-  const ingredient = algorithm === "v2"
-    ? ingredients[0]
-    : [...ingredients].sort((a, b) => assignmentCost(game.robots[prefetcherId], a, boardStation) - assignmentCost(game.robots[prefetcherId], b, boardStation))[0];
+  const ingredient = [...ingredients].sort((a, b) => assignmentCost(game.robots[prefetcherId], a, boardStation) - assignmentCost(game.robots[prefetcherId], b, boardStation))[0];
   game.prefetch = { orderId: selected.id, ingredient, stage: "fetch", robotId: prefetcherId, boardKey, boardStation, counterKey: "pass-top" };
   game.decision = `${ALGORITHMS[algorithm].version} 在烹饪窗口预取 #${selected.id} 的${ingredientName(ingredient)}。`;
 }
@@ -459,13 +433,20 @@ function advancePrefetch(game: GameState, reserved: Set<string>) {
     game.metrics.idle += 1;
   }
 }
+function deliveryReward(order: Order | null, previousCombo: number) {
+  if (!order) return { earned: 60, combo: 0 };
+  const onTime = order.remaining >= 0;
+  const combo = onTime ? previousCombo + 1 : 0;
+  const timeComponent = onTime ? order.remaining * 3 : -Math.min(80, -order.remaining * 5);
+  const comboBonus = onTime ? Math.min(combo - 1, 4) * 25 : 0;
+  return { earned: Math.max(20, 100 + timeComponent + comboBonus), combo };
+}
 function finishDelivery(game: GameState, recipe: RecipeId, difficulty: Difficulty, orderId?: number) {
   const index = orderId === undefined
     ? game.orders.findIndex((order) => order.recipe === recipe)
     : game.orders.findIndex((order) => order.id === orderId);
   const matched = index >= 0 ? game.orders[index] : null;
-  const combo = game.combo + 1;
-  const earned = matched ? 100 + Math.max(0, matched.remaining) * 3 + Math.min(combo - 1, 4) * 25 : 60;
+  const { combo, earned } = deliveryReward(matched, game.combo);
   const orders = index >= 0 ? game.orders.filter((_, orderIndex) => orderIndex !== index) : [...game.orders];
   orders.push(makeOrder(game.nextOrderId, difficulty));
   game.orders = orders;
@@ -556,8 +537,7 @@ function assignSmartJobs(game: GameState) {
 function finishSmartDelivery(game: GameState, plan: SmartPlan, robotId: 0 | 1, difficulty: Difficulty) {
   const index = game.orders.findIndex((order) => order.id === plan.orderId);
   const matched = index >= 0 ? game.orders[index] : null;
-  const combo = game.combo + 1;
-  const earned = matched ? 100 + Math.max(0, matched.remaining) * 3 + Math.min(combo - 1, 4) * 25 : 60;
+  const { combo, earned } = deliveryReward(matched, game.combo);
   const orders = index >= 0 ? game.orders.filter((_, orderIndex) => orderIndex !== index) : [...game.orders];
   orders.push(makeOrder(game.nextOrderId, difficulty));
   game.orders = orders;
@@ -744,12 +724,12 @@ function smartStep(previous: GameState, difficulty: Difficulty) {
     game.metrics.idle += 1;
   }
   const runningPots = game.smartPlans.filter((plan) => plan.phase !== "serve").length;
-  game.decision = `V5 同时管理 ${runningPots} 道在制订单；优先前置空盘、释放机器人并填满空闲灶台。`;
+  game.decision = `滚动双灶策略同时管理 ${runningPots} 道在制订单；优先前置空盘、释放机器人并填满空闲灶台。`;
   return game;
 }
-function autoStep(previous: GameState, difficulty: Difficulty, algorithm: AlgorithmId = "v1") {
+function autoStep(previous: GameState, difficulty: Difficulty, algorithm: AlgorithmId = "baseline") {
   if (!previous.running || previous.paused || previous.ended) return previous;
-  if (algorithm === "v5") return smartStep(previous, difficulty);
+  if (algorithm === "dual") return smartStep(previous, difficulty);
   const game = cloneGame(previous);
   if (!game.cycle) startCycle(game, algorithm);
   const cycle = game.cycle;
@@ -806,7 +786,7 @@ function autoStep(previous: GameState, difficulty: Difficulty, algorithm: Algori
     }
     if (cycle.jobs.every((job) => job.stage === "loaded")) {
       const pot = game.pots[cycle.potKey]; pot.recipe = cycle.recipe; pot.cookLeft = difficulty === "training" ? 8 : 11; pot.ready = false;
-      if (algorithm === "v3" || algorithm === "v4") {
+      if (algorithm === "pipeline") {
         const serviceCosts = ([0, 1] as const).map((id) => ({
           id,
           cost: positionToStationDistance(game.robots[id], "7-2")
@@ -821,7 +801,7 @@ function autoStep(previous: GameState, difficulty: Difficulty, algorithm: Algori
     }
   } else if (cycle.phase === "cook") {
     const assistant = game.robots[cycle.serverId];
-    if (algorithm === "v1") {
+    if (algorithm === "baseline") {
       if (advanceTo(game, 0, "3-4", "远程监控锅具并清空入口", reserved)) {
         game.robots[0].task = "远程监控锅具";
         game.robots[0].target = "中央待命区";
@@ -842,7 +822,7 @@ function autoStep(previous: GameState, difficulty: Difficulty, algorithm: Algori
     } else { assistant.task = "持盘等待出锅"; assistant.target = `主锅 ${game.pots[cycle.potKey].cookLeft}s`; game.metrics.idle += 1; }
   } else {
     const server = game.robots[cycle.serverId];
-    if (algorithm === "v1") {
+    if (algorithm === "baseline") {
       game.robots[0].task = "清空工位 / 待命"; game.robots[0].target = "下一订单";
     } else {
       startPrefetch(game, algorithm);
@@ -868,14 +848,28 @@ function advanceClock(previous: GameState) {
   }
   return next;
 }
-type BenchmarkResult = { algorithm: AlgorithmId; delivered: number; score: number; travel: number; idle: number; conflicts: number; tardiness: number; sequence: string };
-function runBenchmark(algorithm: AlgorithmId, difficulty: Difficulty): BenchmarkResult {
-  let game = createInitialState(difficulty, true);
-  for (let step = 1; step <= ROUND_SECONDS * 2 && !game.ended; step += 1) {
+type ExperimentResult = { algorithm: AlgorithmId; delivered: number; score: number; travel: number; idle: number; conflicts: number; tardiness: number; replans: number; sequence: string };
+type ExperimentBatch = { duration: number; difficulty: Difficulty; objective: ObjectiveId; createdAt: string; results: ExperimentResult[] };
+function runSimulation(algorithm: AlgorithmId, difficulty: Difficulty, duration: number): ExperimentResult {
+  let game = createInitialState(difficulty, true, duration);
+  for (let step = 1; step <= duration * 2 && !game.ended; step += 1) {
     game = autoStep(game, difficulty, algorithm);
     if (step % 2 === 0) game = advanceClock(game);
   }
-  return { algorithm, delivered: game.delivered, score: game.score, travel: game.metrics.travel, idle: game.metrics.idle, conflicts: game.metrics.conflicts, tardiness: game.metrics.tardiness, sequence: game.history.slice(0, 4).map((id) => `#${id}`).join(" › ") };
+  return { algorithm, delivered: game.delivered, score: game.score, travel: game.metrics.travel, idle: game.metrics.idle, conflicts: game.metrics.conflicts, tardiness: game.metrics.tardiness, replans: game.metrics.replans, sequence: game.history.map((id) => `#${id}`).join(" → ") };
+}
+function compareResults(a: ExperimentResult, b: ExperimentResult, objective: ObjectiveId) {
+  if (objective === "score") return b.score - a.score || b.delivered - a.delivered;
+  if (objective === "tardiness") return a.tardiness - b.tardiness || b.delivered - a.delivered;
+  if (objective === "travel") return a.travel - b.travel || b.delivered - a.delivered;
+  if (objective === "balanced") return b.delivered - a.delivered || a.tardiness - b.tardiness || b.score - a.score || a.travel - b.travel;
+  return b.delivered - a.delivered || b.score - a.score;
+}
+function experimentMarkdown(batch: ExperimentBatch) {
+  const pressure = batch.difficulty === "training" ? "标准到达" : "高峰到达";
+  const ranked = [...batch.results].sort((a, b) => compareResults(a, b, batch.objective));
+  const rows = ranked.map((result, index) => `| ${index + 1} | ${ALGORITHMS[result.algorithm].version} | ${ALGORITHMS[result.algorithm].name} | ${result.delivered} | ${result.score} | ${result.tardiness} | ${result.travel} | ${result.idle} | ${result.conflicts} | ${result.replans} | ${result.sequence || "—"} |`).join("\n");
+  return `# Robo Kitchen 实验报告\n\n- 生成时间：${batch.createdAt}\n- 仿真时长：${batch.duration} 秒\n- 订单压力：${pressure}\n- 主要评价目标：${OBJECTIVES[batch.objective].label}（${OBJECTIVES[batch.objective].direction}）\n- 决策频率：2 次 / 仿真秒\n- 初始条件：相同地图、机器人位置与确定性订单队列\n\n> 本报告由页面按当前参数运行后生成，不是预先写入的结果。速度按钮只改变播放速度，不改变每个仿真秒的决策次数。\n\n## 积分规则\n\n- 准时交付：100 基础分 + 剩余秒数 × 3 + 连续准时奖励（每单 +25，最高 +100）。\n- 逾期交付：100 基础分 − 逾期秒数 × 5，单笔最低 20 分，并中断连续准时奖励。\n- 积分不会替代其他目标；报告同时保留完成量、逾期和移动量。\n\n| 排名 | 策略 | 方法 | 完成 | 得分 | 逾期(s) | 移动(格) | 空闲步 | 冲突 | 重规划 | 交付顺序 |\n| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n${rows}\n\n## 策略说明\n\n${ranked.map((result) => `### ${ALGORITHMS[result.algorithm].version} ${ALGORITHMS[result.algorithm].name}\n\n${ALGORITHMS[result.algorithm].note}`).join("\n\n")}\n\n## 后续扩展\n\n当前三种菜名共享同一类两原料工序。后续版本可加入不同工序长度、菜谱、地图和设备布局，但不属于本次实验。\n\n---\nRobo Kitchen · 非商用教学与研究项目\n`;
 }
 function formatTime(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 
@@ -918,17 +912,50 @@ function startKitchenAudio(): KitchenAudio {
 export default function Home() {
   const [mode, setMode] = useState<Mode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("training");
-  const [algorithm, setAlgorithm] = useState<AlgorithmId>("v5");
+  const [algorithm, setAlgorithm] = useState<AlgorithmId>("dual");
+  const [labView, setLabView] = useState<LabView>("run");
   const [speed, setSpeed] = useState<1 | 2>(1);
   const [musicOn, setMusicOn] = useState(false);
-  const [game, setGame] = useState<GameState>(() => createInitialState("training"));
+  const [roundSeconds, setRoundSeconds] = useState(DEFAULT_ROUND_SECONDS);
+  const [objective, setObjective] = useState<ObjectiveId>("balanced");
+  const [experiment, setExperiment] = useState<ExperimentBatch | null>(null);
+  const [experimentRunning, setExperimentRunning] = useState(false);
+  const [game, setGame] = useState<GameState>(() => createInitialState("training", false, DEFAULT_ROUND_SECONDS));
   const audioRef = useRef<KitchenAudio | null>(null);
   const deliveredRef = useRef(0);
-  const resetGame = useCallback((nextDifficulty = difficulty, start = false) => setGame(createInitialState(nextDifficulty, start)), [difficulty]);
-  const selectMode = (nextMode: Mode) => { setMode(nextMode); setGame(createInitialState(difficulty)); };
+  const tickRef = useRef(0);
+  const resetGame = useCallback((nextDifficulty = difficulty, start = false, duration = roundSeconds) => {
+    tickRef.current = 0;
+    setGame(createInitialState(nextDifficulty, start, duration));
+  }, [difficulty, roundSeconds]);
+  const selectMode = (nextMode: Mode) => { setMode(nextMode); resetGame(difficulty); };
   const selectAlgorithm = (nextAlgorithm: AlgorithmId) => {
     setAlgorithm(nextAlgorithm);
-    setGame(createInitialState(difficulty));
+    resetGame(difficulty);
+  };
+  const changeDuration = (value: number) => {
+    const duration = Math.max(30, Math.min(600, Math.round(value / 10) * 10 || 30));
+    setRoundSeconds(duration);
+    setExperiment(null);
+    resetGame(difficulty, false, duration);
+  };
+  const runExperiment = () => {
+    setExperimentRunning(true);
+    window.setTimeout(() => {
+      const results = ALGORITHM_IDS.map((id) => runSimulation(id, difficulty, roundSeconds));
+      setExperiment({ duration: roundSeconds, difficulty, objective, createdAt: new Date().toLocaleString("zh-CN", { hour12: false }), results });
+      setExperimentRunning(false);
+    }, 30);
+  };
+  const exportExperiment = () => {
+    if (!experiment) return;
+    const blob = new Blob([experimentMarkdown(experiment)], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `robo-kitchen-${experiment.duration}s-${experiment.difficulty}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
   const toggleMusic = () => {
     if (audioRef.current) {
@@ -983,15 +1010,20 @@ export default function Home() {
   }, [difficulty, mode]);
 
   useEffect(() => {
-    if (mode !== "auto" || !game.running || game.ended) return;
-    const timer = window.setInterval(() => setGame((previous) => autoStep(previous, difficulty, algorithm)), speed === 1 ? 520 : 260);
+    if (mode !== "auto" || !game.running || game.paused || game.ended) return;
+    const timer = window.setInterval(() => setGame((previous) => {
+      let next = autoStep(previous, difficulty, algorithm);
+      tickRef.current += 1;
+      if (tickRef.current % 2 === 0) next = advanceClock(next);
+      return next;
+    }), 500 / speed);
     return () => window.clearInterval(timer);
-  }, [algorithm, difficulty, game.ended, game.running, mode, speed]);
+  }, [algorithm, difficulty, game.ended, game.paused, game.running, mode, speed]);
   useEffect(() => {
-    if (!game.running || game.paused || game.ended) return;
+    if (mode !== "manual" || !game.running || game.paused || game.ended) return;
     const timer = window.setInterval(() => setGame((previous) => advanceClock(previous)), 1000);
     return () => window.clearInterval(timer);
-  }, [game.ended, game.paused, game.running]);
+  }, [game.ended, game.paused, game.running, mode]);
   useEffect(() => {
     if (mode !== "manual") return;
     const handler = (event: KeyboardEvent) => {
@@ -1009,8 +1041,8 @@ export default function Home() {
   const cells = useMemo(() => Array.from({ length: ROWS * COLS }, (_, index) => ({ row: Math.floor(index / COLS), col: index % COLS })), []);
   const active = game.robots[game.activeRobot];
   const utilization = game.metrics.travel + game.metrics.idle ? Math.round(game.metrics.travel / (game.metrics.travel + game.metrics.idle) * 100) : 0;
-  const benchmarkResults = useMemo(() => ALGORITHM_IDS.map((id) => runBenchmark(id, difficulty)), [difficulty]);
   const selectedMethod = ALGORITHMS[algorithm];
+  const rankedExperiment = experiment ? [...experiment.results].sort((a, b) => compareResults(a, b, experiment.objective)) : [];
 
   return (
     <main className="game-shell">
@@ -1040,7 +1072,7 @@ export default function Home() {
               {activeOrder && <em className="planning-tag">执行中</em>}{prefetchedOrder && !activeOrder && <em className="planning-tag prefetch-tag">预备中</em>}
             </article>); })}</div>
           <div className="decision-card"><span>{selectedMethod.version} · 当前决策</span><strong>{game.decision}</strong><p>算法切换会重置同一组确定性订单，便于公平观察策略差异。</p></div>
-          <div className="mode-picker"><span>订单压力</span><div><button className={difficulty === "training" ? "active" : ""} onClick={() => { setDifficulty("training"); resetGame("training"); }}>标准到达</button><button className={difficulty === "rush" ? "active" : ""} onClick={() => { setDifficulty("rush"); resetGame("rush"); }}>高峰到达</button></div></div>
+          <div className="mode-picker"><span>订单压力</span><div><button className={difficulty === "training" ? "active" : ""} onClick={() => { setDifficulty("training"); setExperiment(null); resetGame("training"); }}>标准到达</button><button className={difficulty === "rush" ? "active" : ""} onClick={() => { setDifficulty("rush"); setExperiment(null); resetGame("rush"); }}>高峰到达</button></div></div>
         </aside>
 
         <section className="kitchen-column">
@@ -1066,10 +1098,19 @@ export default function Home() {
           {mode === "auto" ? <>
             <div className="panel-title-row"><div><p className="section-kicker">ALGORITHM LAB</p><h2>算法实验台</h2></div><span className="algorithm-pill">{selectedMethod.kind}</span></div>
             <div className="algorithm-selector" role="radiogroup" aria-label="选择自动调度算法">{ALGORITHM_IDS.map((id) => <button role="radio" aria-checked={algorithm === id} className={algorithm === id ? "active" : ""} key={id} onClick={() => selectAlgorithm(id)}><b>{ALGORITHMS[id].version}</b><span>{ALGORITHMS[id].shortName}</span></button>)}</div>
-            <div className="auto-actions"><button className="primary-action auto-button" onClick={() => game.running ? setGame((previous) => ({ ...previous, paused: !previous.paused })) : resetGame(difficulty, true)}><span>{game.running ? (game.paused ? "继续运行" : "暂停运行") : "启动自动调度"}</span><small>{game.running ? "保留当前任务与位置" : "从当前订单队列开始"}</small><kbd>{game.paused ? "▶" : "Ⅱ"}</kbd></button><div className="speed-picker"><span>仿真速度</span><button className={speed === 1 ? "active" : ""} onClick={() => setSpeed(1)}>1×</button><button className={speed === 2 ? "active" : ""} onClick={() => setSpeed(2)}>2×</button></div></div>
-            <div className="robot-cards">{game.robots.map((robot) => <article key={robot.id} className={`robot-card ${robot.color}`}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>机器人 {robot.shortName}</small><strong>{robot.task}</strong><em>目标：{robot.target} · {itemLabel(robot.carrying)}</em></span><span className="status-dot" /></article>)}</div>
-            <div className="metric-grid"><div><span>累计移动</span><strong>{game.metrics.travel}</strong><small>格</small></div><div><span>避碰等待</span><strong>{game.metrics.conflicts}</strong><small>次</small></div><div><span>累计逾期</span><strong>{game.metrics.tardiness}</strong><small>秒</small></div><div><span>滚动规划</span><strong>{game.metrics.replans}</strong><small>次</small></div></div>
-            <div className="benchmark-card"><div className="benchmark-heading"><span>标准化 120 秒结果</span><small>{difficulty === "training" ? "标准到达" : "高峰到达"}</small></div><div className="benchmark-table"><span>算法</span><span>完成</span><span>得分</span><span>逾期</span>{benchmarkResults.map((result) => <button key={result.algorithm} className={algorithm === result.algorithm ? "active" : ""} onClick={() => selectAlgorithm(result.algorithm)}><b>{ALGORITHMS[result.algorithm].version}</b><strong>{result.delivered}</strong><em>{result.score}</em><small>{result.tardiness}s</small><i>{result.sequence || "—"}</i></button>)}</div><p>固定初始订单与 2 次决策步/秒；第二行显示交付顺序。结果来自同一离散事件仿真，不是预设文案。</p></div>
+            <div className="lab-tabs" role="tablist" aria-label="实验台视图"><button role="tab" aria-selected={labView === "run"} className={labView === "run" ? "active" : ""} onClick={() => setLabView("run")}>实时运行</button><button role="tab" aria-selected={labView === "experiment"} className={labView === "experiment" ? "active" : ""} onClick={() => setLabView("experiment")}>对照实验</button></div>
+            {labView === "run" ? <div className="lab-view">
+              <div className="auto-actions"><button className="primary-action auto-button" onClick={() => game.running ? setGame((previous) => ({ ...previous, paused: !previous.paused })) : resetGame(difficulty, true)}><span>{game.running ? (game.paused ? "继续运行" : "暂停运行") : "启动自动调度"}</span><small>{roundSeconds} 秒 · 固定 2 次决策/秒</small><kbd>{game.paused ? "▶" : "Ⅱ"}</kbd></button><div className="speed-picker"><span>播放速度</span><button className={speed === 1 ? "active" : ""} onClick={() => setSpeed(1)}>1×</button><button className={speed === 2 ? "active" : ""} onClick={() => setSpeed(2)}>2×</button></div></div>
+              <div className="robot-cards compact">{game.robots.map((robot) => <article key={robot.id} className={`robot-card ${robot.color}`}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>{robot.name} · {itemLabel(robot.carrying)}</small><strong>{robot.task}</strong><em>目标：{robot.target}</em></span><span className="status-dot" /></article>)}</div>
+              <div className="metric-grid"><div><span>移动</span><strong>{game.metrics.travel}</strong><small>格</small></div><div><span>冲突</span><strong>{game.metrics.conflicts}</strong><small>次</small></div><div><span>逾期</span><strong>{game.metrics.tardiness}</strong><small>秒</small></div><div><span>规划</span><strong>{game.metrics.replans}</strong><small>次</small></div></div>
+              <div className="score-rule"><strong>积分怎么计算？</strong><p>准时：100 + 剩余秒数×3 + 连续准时奖励；逾期：100 − 逾期秒数×5，最低 20 分并中断连击。</p></div>
+            </div> : <div className="experiment-card lab-view">
+              <div className="experiment-fields"><label><span>仿真时长</span><div><input type="number" min="30" max="600" step="10" value={roundSeconds} onChange={(event) => changeDuration(Number(event.target.value))}/><b>秒</b></div></label><label><span>主要评价目标</span><select value={objective} onChange={(event) => { setObjective(event.target.value as ObjectiveId); setExperiment(null); }}>{Object.entries(OBJECTIVES).map(([id, item]) => <option value={id} key={id}>{item.label}</option>)}</select></label></div>
+              <p className="objective-note">{OBJECTIVES[objective].description} 该选择只改变结果排名，不改写策略；所有指标仍会一并记录。</p>
+              <div className="experiment-actions"><button className="run-experiment" disabled={experimentRunning} onClick={runExperiment}>{experimentRunning ? "正在运行…" : "运行三种策略"}</button><button className="export-button" disabled={!experiment} onClick={exportExperiment}>导出 MD</button></div>
+              {experiment ? <><div className="experiment-meta"><span>{experiment.duration}s · {experiment.difficulty === "training" ? "标准到达" : "高峰到达"}</span><strong>按“{OBJECTIVES[experiment.objective].label}”排名</strong></div><div className="experiment-table"><span>#</span><span>策略</span><span>完成</span><span>积分</span><span>逾期</span>{rankedExperiment.map((result, index) => <button key={result.algorithm} onClick={() => { selectAlgorithm(result.algorithm); setLabView("run"); }}><i>{index + 1}</i><b>{ALGORITHMS[result.algorithm].version}</b><strong>{result.delivered}</strong><em>{result.score}</em><small>{result.tardiness}s</small><p>{result.sequence || "暂无交付"}</p></button>)}</div></> : <div className="empty-experiment"><b>尚未运行</b><span>设置时长和目标后，页面才会计算并记录结果。</span></div>}
+              <details className="score-details"><summary>查看完整积分与目标定义</summary><p>准时交付 = 100 + 剩余秒数×3 + 连击奖励；连续准时每单增加 25 分，最高 100 分。逾期每秒扣 5 分，单笔最低 20 分，连击归零。完成量、积分、累计逾期和移动量是彼此独立的评价指标。</p></details>
+            </div>}
             <details className="method-details"><summary>查看 {selectedMethod.version} 算法逻辑 <span>＋</span></summary><div className="method-card"><p>{selectedMethod.version} · {selectedMethod.kind.toUpperCase()}</p><strong>{selectedMethod.name}</strong><ol>{selectedMethod.steps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}</ol><em>{selectedMethod.note}</em></div></details>
           </> : <>
             <div className="panel-title-row"><div><p className="section-kicker">MANUAL MODE</p><h2>手动体验</h2></div><span className="team-count">对照组</span></div>
@@ -1080,7 +1121,7 @@ export default function Home() {
           </>}
         </aside>
       </section>
-      <footer><span><i /> 双机器人离散事件仿真 · V1–V5</span><p>原创程序化配乐 · 仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
+      <footer><span><i /> 三策略多目标离散事件仿真</span><p>原创程序化配乐 · 仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
     </main>
   );
 }

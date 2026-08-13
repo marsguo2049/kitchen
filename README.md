@@ -1,54 +1,56 @@
 # Robo Kitchen
 
-Robo Kitchen is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders on a fixed discrete grid. The page lets the user run the same deterministic scenario with five scheduling algorithms and compare throughput, score, tardiness, travel, waiting, and delivery sequence.
+Robo Kitchen is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders on a fixed discrete grid. The page compares three meaningfully different scheduling strategies through user-configured, on-demand simulation experiments.
 
 ## What is modelled
 
 - **Simulation:** orders, deadlines, precedence constraints, shared workstations, cooking time, robot state, and four-direction movement.
 - **Routing:** breadth-first search (BFS) finds a shortest feasible path to a workstation; one-step position reservations prevent two robots from entering the same cell.
-- **Scheduling:** V1–V3 are explainable heuristics. V4 exactly enumerates the current three-order sequencing subproblem. V5 adds resource-aware dual-stove scheduling, plate staging, and opportunistic preparation while food cooks.
+- **Scheduling:** the active comparison contains a sequential baseline, a single-stove pipeline with distance auction, and a rolling dual-stove resource-aware heuristic.
+- **Experiment runner:** choose a 30–600 second horizon, demand pressure, and evaluation objective; results are generated only when the experiment is run and can be exported as Markdown.
 - **Audio:** the optional soundtrack is generated in the browser from an original note pattern. No music or audio asset from *Overcooked* is included.
 
 Every dish follows:
 
 `collect ingredients → chop → load pot → cook → collect plate → plate → serve`
 
-## Algorithms
+## Active strategies
 
-| Version | Method | Main decision rule | Scope |
+| Strategy | Method | Main decision rule | Scope |
 | --- | --- | --- | --- |
-| V1 | Sequential EDF baseline | Earliest deadline first; fixed robot roles; next order starts after delivery | Baseline heuristic |
-| V2 | Cross-order pipeline | While one dish cooks, prepare and buffer an ingredient for the next order | Pipeline heuristic |
-| V3 | Distance auction | Enumerate robot–ingredient–cutting-board assignments and choose the least estimated travel | Assignment heuristic |
-| V4 | Exact short-window search | Enumerate all current three-order sequences, then combine the best sequence with V3 assignment | Exact only for the stated surrogate subproblem |
-| V5 | Resource-aware dual-stove dispatch | Keep both stoves occupied, stage plates beside cooking pots, and dynamically give free robots the next executable prep task | Rolling resource-aware heuristic |
+| A · Baseline | Sequential EDF | Earliest deadline first, fixed robot roles, next order after delivery | Reproducible baseline |
+| B · Pipeline | Pipeline + distance auction | Prepare the next order while cooking and assign work by estimated travel | Combines former V2 and V3 |
+| C · Dual stove | Rolling window + resource dispatch | Use both stoves, stage plates beside pots, and keep free robots preparing future work | Combines former V4 and V5 |
 
-The algorithms are deliberately cumulative: V2 adds pipeline overlap to V1, V3 adds flexible task allocation to V2, V4 adds rolling exact sequencing to V3, and V5 adds concurrent work-in-process across both stoves with anticipatory plate and prep decisions.
+The earlier V1–V5 labels are retained as project history, but the interface no longer treats every incremental feature as an independent competitor. This avoids redundant comparisons.
 
-## Standardized comparison
+## Objectives and score
 
-The interface computes these results from the actual simulation using a fixed initial queue, a 120-second horizon, and two decision steps per simulated second. It does not display a hand-written result table.
+Every report retains all metrics. The selected primary objective only controls ranking:
 
-Representative deterministic results:
+- maximize completed orders;
+- maximize score;
+- minimize total tardiness;
+- minimize robot travel;
+- balanced lexicographic order: maximize completion, then minimize tardiness, maximize score, and minimize travel.
 
-| Demand | Algorithm | Completed | Score | Total tardiness | First deliveries |
-| --- | --- | ---: | ---: | ---: | --- |
-| Standard | V1 | 4 | 739 | 19 s | #1 → #2 → #3 → #4 |
-| Standard | V2 | 4 | 742 | 12 s | #1 → #2 → #3 → #4 |
-| Standard | V3 | 5 | 972 | 0 s | #1 → #2 → #3 → #4 |
-| Standard | V4 | 5 | 972 | 0 s | #1 → #2 → #3 → #4 |
-| Standard | V5 | 6 | 1352 | 0 s | #2 → #1 → #3 → #4 |
-| Rush | V1 | 4 | 607 | 91 s | #1 → #2 → #3 → #4 |
-| Rush | V2 | 4 | 607 | 82 s | #1 → #2 → #3 → #4 |
-| Rush | V3 | 4 | 610 | 70 s | #1 → #2 → #3 → #4 |
-| Rush | V4 | 4 | 610 | 70 s | #1 → #3 → #2 → #4 |
-| Rush | V5 | 5 | 804 | 64 s | #1 → #3 → #2 → #4 |
+Score is explicit:
 
-Equal objective values are valid ties. For example, V3 and V4 produce the same rush score and tardiness here, while V4 selects a different sequence. This is useful experimental evidence rather than a reason to force artificial numerical differences.
+- On-time delivery: `100 + remaining seconds × 3 + combo bonus`.
+- Consecutive on-time deliveries add 25 points each, capped at 100.
+- Late delivery: `100 − late seconds × 5`, with a minimum of 20 points; lateness resets the combo.
+
+Score is not a substitute for throughput or tardiness. A strategy can complete more orders but receive a lower score if its deliveries are late.
+
+## Experiment protocol
+
+The interface no longer shows a precomputed “standard 120-second” table. The user sets the horizon and runs all three strategies from the same deterministic initial map, robot positions, and order queue. The simulator performs exactly two decisions per simulated second. The 1×/2× control changes playback speed only, so it does not change the decision budget.
+
+After a run, the complete parameters, ranking, metrics, delivery sequence, score definition, and strategy notes can be exported as a `.md` report.
 
 ## Modes
 
-- **Automatic dispatch** is the default, with V5 preselected. Select V1–V5 before starting a run.
+- **Automatic dispatch** is the default, with the rolling dual-stove strategy preselected.
 - **Manual experience** preserves the same kitchen and process as a human-control comparison.
 - **Standard / rush demand** changes order deadlines and cooking pressure.
 
@@ -68,7 +70,13 @@ npm run test:flow
 npm run build:pages
 ```
 
-The regression suite checks the immutable 9×8 map, all five algorithms in both demand modes, completion without deadlock, cross-order preparation, V5 dual-stove use, plate staging, preparation during cooking, and meaningful benchmark differences.
+The regression suite checks the immutable 9×8 map, all three strategies in both demand modes, completion without deadlock, cross-order preparation, dual-stove use, plate staging, configurable horizons, the explicit late-delivery penalty, and Markdown export contents.
+
+## Current recipe scope and roadmap
+
+The interface names three recipes—tomato soup, mushroom soup, and garden stew—but all currently share the same two-ingredient precedence structure. They therefore represent recipe variants, not three fundamentally different production processes.
+
+Future versions may add recipes with different ingredient counts and processing routes, multiple cooking appliances, and switchable maps. These are intentionally left out of V6 so the current experiment remains controlled and interpretable.
 
 ## GitHub Pages
 

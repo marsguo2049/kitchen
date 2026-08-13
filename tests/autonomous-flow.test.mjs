@@ -10,8 +10,10 @@ test("the kitchen grid has immutable row and column tracks", () => {
   assert.match(css, /grid-template-columns:\s*repeat\(9,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /grid-template-rows:\s*repeat\(8,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /\.robot\s*\{[^}]*position:\s*absolute/s);
-  for (const id of ["v1", "v2", "v3", "v4", "v5"]) assert.match(page, new RegExp(`${id}: \\{`));
+  for (const id of ["baseline", "pipeline", "dual"]) assert.match(page, new RegExp(`${id}: \\{`));
   assert.match(page, /className="algorithm-selector"/);
+  assert.match(page, /运行三种策略/);
+  assert.match(page, /导出 MD/);
 });
 
 test("repository declares noncommercial licensing and usage notification", () => {
@@ -22,13 +24,20 @@ test("repository declares noncommercial licensing and usage notification", () =>
   assert.match(notice, /github\.com\/marsguo2049\/kitchen\/issues/);
 });
 
+test("playback speed does not change the simulated decision budget", () => {
+  const page = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /500 \/ speed/);
+  assert.match(page, /tickRef\.current % 2 === 0/);
+  assert.match(page, /mode !== "manual"[^]*setInterval\(\(\) => setGame\(\(previous\) => advanceClock\(previous\)\), 1000\)/);
+});
+
 function loadSimulationHarness() {
   const pageSource = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const pureSource = pageSource
     .slice(0, pageSource.indexOf("export default function Home"))
     .replace(/^"use client";\s*/m, "")
     .replace(/^import .*?;\s*/m, "");
-  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runBenchmark, exactWindowSequence, ALGORITHM_IDS };`;
+  const harnessSource = `${pureSource}\n;globalThis.__simulation = { createInitialState, autoStep, cloneGame, advanceClock, runSimulation, experimentMarkdown, deliveryReward, exactWindowSequence, ALGORITHM_IDS };`;
   const javascript = ts.transpileModule(harnessSource, {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -38,7 +47,7 @@ function loadSimulationHarness() {
 }
 
 for (const difficulty of ["training", "rush"]) {
-  for (const algorithm of ["v1", "v2", "v3", "v4", "v5"]) test(`${algorithm} autonomous ${difficulty} flow completes two orders without deadlock`, () => {
+  for (const algorithm of ["baseline", "pipeline", "dual"]) test(`${algorithm} autonomous ${difficulty} flow completes two orders without deadlock`, () => {
     const { createInitialState, autoStep, advanceClock } = loadSimulationHarness();
     let state = createInitialState(difficulty, true);
     let lastSignature = "";
@@ -79,11 +88,11 @@ for (const difficulty of ["training", "rush"]) {
     assert.equal(sawPlate, true, "a robot should fetch a plate while cooking");
     assert.equal(sawDish, true, "the cooked recipe should be plated");
     assert.ok(state.delivered >= 2, `expected two deliveries, got ${state.delivered}`);
-    if (algorithm !== "v1") assert.equal(sawCrossOrderPrep, true, `${algorithm} should overlap work across orders`);
+    if (algorithm !== "baseline") assert.equal(sawCrossOrderPrep, true, `${algorithm} should overlap work across orders`);
   });
 }
 
-test("V5 actually uses both stoves and stages plates before food is ready", () => {
+test("dual strategy actually uses both stoves and stages plates before food is ready", () => {
   const { createInitialState, autoStep, advanceClock } = loadSimulationHarness();
   let state = createInitialState("training", true);
   let sawTwoPlans = false;
@@ -91,7 +100,7 @@ test("V5 actually uses both stoves and stages plates before food is ready", () =
   let sawStagedPlate = false;
   let sawPrepWhileCooking = false;
   for (let step = 1; step <= 360 && state.delivered < 3; step += 1) {
-    state = autoStep(state, "training", "v5");
+    state = autoStep(state, "training", "dual");
     if (step % 2 === 0) state = advanceClock(state);
     sawTwoPlans ||= state.smartPlans.length >= 2;
     sawRightPot ||= Boolean(state.pots["right-pot"].recipe || state.pots["right-pot"].ingredients.length);
@@ -99,21 +108,39 @@ test("V5 actually uses both stoves and stages plates before food is ready", () =
     sawPrepWhileCooking ||= state.smartPlans.some((plan) => plan.phase === "cook") &&
       (state.prefetch !== null || state.smartPlans.some((plan) => plan.phase === "prep"));
   }
-  assert.equal(sawTwoPlans, true, "V5 should keep two orders in process");
-  assert.equal(sawRightPot, true, "V5 should use the spare stove");
-  assert.equal(sawStagedPlate, true, "V5 should stage a plate beside a cooking pot");
-  assert.equal(sawPrepWhileCooking, true, "V5 should prepare work while another dish cooks");
-  assert.ok(state.delivered >= 3, `expected three V5 deliveries, got ${state.delivered}`);
+  assert.equal(sawTwoPlans, true, "dual strategy should keep two orders in process");
+  assert.equal(sawRightPot, true, "dual strategy should use the spare stove");
+  assert.equal(sawStagedPlate, true, "dual strategy should stage a plate beside a cooking pot");
+  assert.equal(sawPrepWhileCooking, true, "dual strategy should prepare work while another dish cooks");
+  assert.ok(state.delivered >= 3, `expected three dual-strategy deliveries, got ${state.delivered}`);
 });
 
-test("standardized benchmark exposes meaningful V1–V5 differences", () => {
-  const { runBenchmark } = loadSimulationHarness();
-  const training = Object.fromEntries(["v1", "v2", "v3", "v4", "v5"].map((algorithm) => [algorithm, runBenchmark(algorithm, "training")]));
-  const rush = Object.fromEntries(["v1", "v2", "v3", "v4", "v5"].map((algorithm) => [algorithm, runBenchmark(algorithm, "rush")]));
-  assert.ok(training.v2.tardiness < training.v1.tardiness, "pipeline should reduce training tardiness");
-  assert.ok(training.v3.delivered > training.v2.delivered, "distance auction should improve training throughput");
-  assert.ok(rush.v3.tardiness < rush.v2.tardiness, "distance auction should reduce rush tardiness");
-  assert.notEqual(rush.v4.sequence, rush.v3.sequence, "exact window search should choose a different rush sequence");
-  assert.ok(training.v5.delivered >= training.v4.delivered, "dual-stove V5 should not reduce training throughput");
-  assert.ok(rush.v5.delivered >= rush.v4.delivered, "dual-stove V5 should not reduce rush throughput");
+test("on-demand experiments support arbitrary horizons and meaningful strategy differences", () => {
+  const { runSimulation } = loadSimulationHarness();
+  const short = runSimulation("dual", "training", 60);
+  const long = runSimulation("dual", "training", 180);
+  const training = Object.fromEntries(["baseline", "pipeline", "dual"].map((algorithm) => [algorithm, runSimulation(algorithm, "training", 120)]));
+  assert.ok(long.delivered > short.delivered, "a longer experiment horizon should permit more deliveries");
+  assert.ok(training.pipeline.delivered >= training.baseline.delivered, "pipeline should not reduce baseline throughput");
+  assert.ok(training.dual.delivered >= training.pipeline.delivered, "dual-stove strategy should not reduce pipeline throughput");
+});
+
+test("scoring rule rewards punctual work and penalizes lateness explicitly", () => {
+  const { deliveryReward } = loadSimulationHarness();
+  const onTime = deliveryReward({ remaining: 10 }, 2);
+  const late = deliveryReward({ remaining: -10 }, 3);
+  assert.equal(onTime.earned, 180);
+  assert.equal(onTime.combo, 3);
+  assert.equal(late.earned, 50);
+  assert.equal(late.combo, 0);
+});
+
+test("Markdown report contains parameters, objectives, score formula and all metrics", () => {
+  const { runSimulation, experimentMarkdown } = loadSimulationHarness();
+  const batch = { duration: 90, difficulty: "rush", objective: "balanced", createdAt: "2026-08-13 10:00:00", results: ["baseline", "pipeline", "dual"].map((algorithm) => runSimulation(algorithm, "rush", 90)) };
+  const markdown = experimentMarkdown(batch);
+  assert.match(markdown, /仿真时长：90 秒/);
+  assert.match(markdown, /主要评价目标：综合字典序/);
+  assert.match(markdown, /逾期秒数 × 5/);
+  assert.match(markdown, /\| 排名 \| 策略 \| 方法 \| 完成 \| 得分 \|/);
 });
