@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Ingredient = "tomato" | "mushroom";
 type RecipeId = "tomato-soup" | "mushroom-soup" | "garden-stew";
 type Mode = "auto" | "manual";
 type Difficulty = "training" | "rush";
-type AlgorithmId = "v1" | "v2" | "v3" | "v4";
+type AlgorithmId = "v1" | "v2" | "v3" | "v4" | "v5";
 type CarryItem =
   | { kind: "raw"; ingredient: Ingredient }
   | { kind: "chopped"; ingredient: Ingredient }
@@ -49,6 +49,24 @@ type AutoCycle = {
   serverId: 0 | 1;
   prefetcherId: 0 | 1;
 };
+type SmartJob = {
+  ingredient: Ingredient;
+  stage: JobStage;
+  robotId: 0 | 1 | null;
+  boardKey?: BoardKey;
+  boardStation?: BoardStation;
+  bufferKey?: "pass-top";
+};
+type SmartPlan = {
+  orderId: number;
+  recipe: RecipeId;
+  potKey: "left-pot" | "right-pot";
+  potStation: "4-0" | "4-8";
+  phase: "prep" | "cook" | "ready" | "serve";
+  jobs: [SmartJob, SmartJob];
+  plateStaged: boolean;
+  serverId: 0 | 1 | null;
+};
 type Metrics = { travel: number; idle: number; conflicts: number; replans: number; tardiness: number };
 type GameState = {
   robots: [Robot, Robot];
@@ -71,6 +89,7 @@ type GameState = {
   lastRecipe: RecipeId | null;
   cycle: AutoCycle | null;
   prefetch: Prefetch | null;
+  smartPlans: SmartPlan[];
   metrics: Metrics;
 };
 type Station =
@@ -123,6 +142,14 @@ const ALGORITHMS: Record<AlgorithmId, { version: string; name: string; shortName
     kind: "精确子问题",
     steps: ["枚举当前三单的全部顺序", "评估完工、逾期与换型代价", "结合 V3 距离竞价分工", "每次交付后重新求解窗口"],
     note: "对当前简化的三订单排序子问题精确；不代表完整厨房仿真的全局最优解。",
+  },
+  v5: {
+    version: "V5",
+    name: "资源感知双灶调度",
+    shortName: "双灶协同",
+    kind: "资源感知启发式",
+    steps: ["两口灶同时承接不同订单", "空盘提前放到对应灶台旁", "等待烹饪时继续切下一单", "机器人按距离与工位状态动态接活"],
+    note: "把等待时间变成移动和备料时间；双灶、盘子、切配台与机器人统一参与滚动决策。",
   },
 };
 const ALGORITHM_IDS = Object.keys(ALGORITHMS) as AlgorithmId[];
@@ -192,7 +219,7 @@ function createInitialState(difficulty: Difficulty, running = false): GameState 
     orders: [makeOrder(1, difficulty), makeOrder(2, difficulty), makeOrder(3, difficulty)], history: [],
     score: 0, delivered: 0, combo: 0, timeLeft: ROUND_SECONDS, running, paused: false, ended: false,
     message: running ? "调度器启动，正在读取订单队列。" : "系统就绪，启动后由算法自动完成全部任务。",
-    decision: "等待订单触发滚动规划。", nextOrderId: 4, lastRecipe: null, cycle: null, prefetch: null,
+    decision: "等待订单触发滚动规划。", nextOrderId: 4, lastRecipe: null, cycle: null, prefetch: null, smartPlans: [],
     metrics: { travel: 0, idle: 0, conflicts: 0, replans: 0, tardiness: 0 },
   };
 }
@@ -205,6 +232,7 @@ function cloneGame(previous: GameState): GameState {
     counters: { ...previous.counters }, orders: previous.orders.map((order) => ({ ...order })), history: [...previous.history],
     cycle: previous.cycle ? { ...previous.cycle, jobs: previous.cycle.jobs.map((job) => ({ ...job })) as [PrepJob, PrepJob] } : null,
     prefetch: previous.prefetch ? { ...previous.prefetch } : null,
+    smartPlans: previous.smartPlans.map((plan) => ({ ...plan, jobs: plan.jobs.map((job) => ({ ...job })) as [SmartJob, SmartJob] })),
     metrics: { ...previous.metrics },
   };
 }
@@ -454,8 +482,274 @@ function finishDelivery(game: GameState, recipe: RecipeId, difficulty: Difficult
     if (!keepsPrefetch) robot.carrying = null;
   });
 }
+function smartOrder(game: GameState, excluded: Set<number>) {
+  const available = game.orders.filter((order) => !excluded.has(order.id));
+  return exactWindowSequence(available, game.lastRecipe)[0] ?? null;
+}
+function ensureSmartPlans(game: GameState) {
+  const occupiedPots = new Set(game.smartPlans.filter((plan) => plan.phase !== "serve").map((plan) => plan.potKey));
+  const activeOrders = new Set(game.smartPlans.map((plan) => plan.orderId));
+  while (occupiedPots.size < 2) {
+    const stagedOrder = game.prefetch?.stage === "staged"
+      ? game.orders.find((order) => order.id === game.prefetch?.orderId && !activeOrders.has(order.id)) ?? null
+      : null;
+    const excluded = new Set(activeOrders);
+    if (game.prefetch && game.prefetch.stage !== "staged") excluded.add(game.prefetch.orderId);
+    const selected = stagedOrder ?? smartOrder(game, excluded);
+    if (!selected) break;
+    const [potKey, potStation] = !occupiedPots.has("left-pot")
+      ? ["left-pot", "4-0"] as const
+      : ["right-pot", "4-8"] as const;
+    const ingredients = [...RECIPES[selected.recipe].ingredients] as [Ingredient, Ingredient];
+    let jobs: [SmartJob, SmartJob] = [
+      { ingredient: ingredients[0], stage: "fetch", robotId: null },
+      { ingredient: ingredients[1], stage: "fetch", robotId: null },
+    ];
+    if (stagedOrder && game.prefetch) {
+      const staged = game.prefetch;
+      const remaining = [...ingredients];
+      remaining.splice(remaining.indexOf(staged.ingredient), 1);
+      jobs = [
+        { ingredient: staged.ingredient, stage: "buffer", robotId: null, bufferKey: staged.counterKey },
+        { ingredient: remaining[0], stage: "fetch", robotId: null },
+      ];
+      game.prefetch = null;
+    }
+    game.smartPlans.push({ orderId: selected.id, recipe: selected.recipe, potKey, potStation, phase: "prep", jobs, plateStaged: false, serverId: null });
+    occupiedPots.add(potKey);
+    activeOrders.add(selected.id);
+    game.metrics.replans += 1;
+  }
+}
+function smartJobForRobot(game: GameState, robotId: 0 | 1) {
+  for (const plan of game.smartPlans) {
+    const job = plan.jobs.find((candidate) => candidate.robotId === robotId && candidate.stage !== "loaded");
+    if (job) return { plan, job };
+  }
+  return null;
+}
+function smartRobotBusy(game: GameState, robotId: 0 | 1) {
+  if (game.robots[robotId].carrying) return true;
+  if (smartJobForRobot(game, robotId)) return true;
+  if (game.prefetch?.robotId === robotId && game.prefetch.stage !== "staged") return true;
+  return game.smartPlans.some((plan) => plan.serverId === robotId);
+}
+function assignSmartJobs(game: GameState) {
+  for (const robotId of [0, 1] as const) {
+    if (smartRobotBusy(game, robotId)) continue;
+    const activePlans = new Set(game.smartPlans.flatMap((plan) => plan.jobs.filter((job) => job.robotId !== null && job.stage !== "loaded").map(() => plan.orderId)));
+    const candidates = game.smartPlans.flatMap((plan) => plan.phase === "prep"
+      ? plan.jobs.filter((job) => job.robotId === null && job.stage !== "loaded").map((job) => ({ plan, job }))
+      : []);
+    candidates.sort((a, b) => {
+      const aOrder = game.orders.find((order) => order.id === a.plan.orderId);
+      const bOrder = game.orders.find((order) => order.id === b.plan.orderId);
+      const aStation = a.job.stage === "buffer" ? "3-4" : a.job.ingredient === "tomato" ? "0-2" : "0-6";
+      const bStation = b.job.stage === "buffer" ? "3-4" : b.job.ingredient === "tomato" ? "0-2" : "0-6";
+      const aScore = positionToStationDistance(game.robots[robotId], aStation) + (activePlans.has(a.plan.orderId) ? 14 : 0) + (aOrder?.remaining ?? 0) * .04;
+      const bScore = positionToStationDistance(game.robots[robotId], bStation) + (activePlans.has(b.plan.orderId) ? 14 : 0) + (bOrder?.remaining ?? 0) * .04;
+      return aScore - bScore || a.plan.orderId - b.plan.orderId;
+    });
+    if (candidates[0]) candidates[0].job.robotId = robotId;
+  }
+}
+function finishSmartDelivery(game: GameState, plan: SmartPlan, robotId: 0 | 1, difficulty: Difficulty) {
+  const index = game.orders.findIndex((order) => order.id === plan.orderId);
+  const matched = index >= 0 ? game.orders[index] : null;
+  const combo = game.combo + 1;
+  const earned = matched ? 100 + Math.max(0, matched.remaining) * 3 + Math.min(combo - 1, 4) * 25 : 60;
+  const orders = index >= 0 ? game.orders.filter((_, orderIndex) => orderIndex !== index) : [...game.orders];
+  orders.push(makeOrder(game.nextOrderId, difficulty));
+  game.orders = orders;
+  game.nextOrderId += 1;
+  game.score += earned;
+  game.delivered += 1;
+  game.combo = combo;
+  game.lastRecipe = plan.recipe;
+  if (matched) game.history.push(matched.id);
+  game.metrics.tardiness += matched ? Math.max(0, -matched.remaining) : 0;
+  game.smartPlans = game.smartPlans.filter((candidate) => candidate !== plan);
+  const robot = game.robots[robotId];
+  robot.carrying = null;
+  robot.task = "交付完成，立即接取新任务";
+  robot.target = "滚动调度器";
+  game.message = `双灶订单 #${plan.orderId} 交付，+${earned} 分；空闲灶台立即接续新订单。`;
+  game.decision = "释放机器人与灶台，重新计算订单、距离和工位占用。";
+}
+function startSmartPrefetch(game: GameState, robotId: 0 | 1) {
+  if (game.prefetch || game.counters["pass-top"]) return;
+  const excluded = new Set(game.smartPlans.map((plan) => plan.orderId));
+  const selected = smartOrder(game, excluded);
+  if (!selected) return;
+  const boardKey: BoardKey = robotId === 0 ? "left-cut" : "right-cut";
+  const boardStation: BoardStation = robotId === 0 ? "2-0" : "2-8";
+  const ingredient = [...RECIPES[selected.recipe].ingredients].sort((a, b) => assignmentCost(game.robots[robotId], a, boardStation) - assignmentCost(game.robots[robotId], b, boardStation))[0];
+  game.prefetch = { orderId: selected.id, ingredient, stage: "fetch", robotId, boardKey, boardStation, counterKey: "pass-top" };
+  game.decision = `两口灶烹饪期间，${game.robots[robotId].name}机会性准备 #${selected.id} 的${ingredientName(ingredient)}。`;
+}
+function smartStep(previous: GameState, difficulty: Difficulty) {
+  const game = cloneGame(previous);
+  ensureSmartPlans(game);
+  const reserved = new Set<string>();
+  const acted = new Set<0 | 1>();
+
+  for (const plan of game.smartPlans) {
+    const pot = game.pots[plan.potKey];
+    if (plan.phase === "prep" && plan.jobs.every((job) => job.stage === "loaded")) {
+      pot.recipe = plan.recipe;
+      pot.cookLeft = difficulty === "training" ? 8 : 11;
+      pot.ready = false;
+      plan.phase = "cook";
+      plan.jobs.forEach((job) => { job.robotId = null; });
+      game.message = `#${plan.orderId} 在${plan.potKey === "left-pot" ? "主灶" : "备用灶"}开始烹饪；调度器同时安排空盘和下一单。`;
+    }
+    if (plan.phase === "cook" && pot.ready) plan.phase = "ready";
+  }
+
+  for (const plan of [...game.smartPlans]) {
+    const serverId = plan.serverId;
+    if (serverId === null || acted.has(serverId)) continue;
+    const robot = game.robots[serverId];
+    if (robot.carrying?.kind === "dish" && plan.phase === "serve") {
+      const arrived = advanceTo(game, serverId, "7-6", `交付 #${plan.orderId}`, reserved);
+      acted.add(serverId);
+      if (arrived) finishSmartDelivery(game, plan, serverId, difficulty);
+    }
+  }
+
+  for (const plan of game.smartPlans) {
+    const serverId = plan.serverId;
+    if (serverId === null || acted.has(serverId) || plan.phase === "serve") continue;
+    const robot = game.robots[serverId];
+    if (!robot.carrying && !plan.plateStaged) {
+      const arrived = advanceTo(game, serverId, "7-2", `为 #${plan.orderId} 提前取盘`, reserved);
+      acted.add(serverId);
+      if (arrived) robot.carrying = { kind: "plate" };
+    } else if (robot.carrying?.kind === "plate") {
+      const arrived = advanceTo(game, serverId, plan.potStation, `把空盘送到 #${plan.orderId} 灶台旁`, reserved);
+      acted.add(serverId);
+      if (arrived) {
+        const pot = game.pots[plan.potKey];
+        if (pot.ready) {
+          robot.carrying = { kind: "dish", recipe: plan.recipe };
+          game.pots[plan.potKey] = { ingredients: [], recipe: null, cookLeft: 0, ready: false };
+          plan.phase = "serve";
+        } else {
+          robot.carrying = null;
+          plan.plateStaged = true;
+          plan.serverId = null;
+          robot.task = "空盘已放在灶旁，转去备料";
+          robot.target = "下一项可执行任务";
+          game.message = `空盘已提前放在${plan.potKey === "left-pot" ? "主灶" : "备用灶"}旁；${robot.name}无需原地等待。`;
+        }
+      }
+    } else if (plan.plateStaged && plan.phase === "ready") {
+      const arrived = advanceTo(game, serverId, plan.potStation, `从 #${plan.orderId} 灶台直接装盘`, reserved);
+      acted.add(serverId);
+      if (arrived) {
+        robot.carrying = { kind: "dish", recipe: plan.recipe };
+        game.pots[plan.potKey] = { ingredients: [], recipe: null, cookLeft: 0, ready: false };
+        plan.phase = "serve";
+      }
+    }
+  }
+
+  for (const plan of game.smartPlans) {
+    if (plan.phase !== "ready" && plan.phase !== "cook") continue;
+    if (plan.serverId !== null || (plan.plateStaged && plan.phase !== "ready")) continue;
+    const pickupStation = plan.plateStaged ? plan.potStation : "7-2";
+    const free = ([0, 1] as const).filter((id) => !acted.has(id) && !smartRobotBusy(game, id));
+    free.sort((a, b) => positionToStationDistance(game.robots[a], pickupStation) - positionToStationDistance(game.robots[b], pickupStation));
+    const serverId = free[0];
+    if (serverId === undefined) continue;
+    plan.serverId = serverId;
+    const robot = game.robots[serverId];
+    const arrived = advanceTo(game, serverId, pickupStation, plan.plateStaged ? `从 #${plan.orderId} 灶台直接装盘` : `为 #${plan.orderId} 提前取盘`, reserved);
+    acted.add(serverId);
+    if (arrived && plan.plateStaged) {
+      robot.carrying = { kind: "dish", recipe: plan.recipe };
+      game.pots[plan.potKey] = { ingredients: [], recipe: null, cookLeft: 0, ready: false };
+      plan.phase = "serve";
+    } else if (arrived) robot.carrying = { kind: "plate" };
+  }
+
+  assignSmartJobs(game);
+  for (const robotId of [0, 1] as const) {
+    if (acted.has(robotId)) continue;
+    const assignment = smartJobForRobot(game, robotId);
+    if (!assignment) continue;
+    const { plan, job } = assignment;
+    const robot = game.robots[robotId];
+    if (job.stage === "fetch") {
+      const station = job.ingredient === "tomato" ? "0-2" : "0-6";
+      const arrived = advanceTo(game, robotId, station, `为 #${plan.orderId} 取${ingredientName(job.ingredient)}`, reserved);
+      acted.add(robotId);
+      if (arrived) { robot.carrying = { kind: "raw", ingredient: job.ingredient }; job.stage = "cut"; }
+    } else if (job.stage === "buffer") {
+      const arrived = advanceTo(game, robotId, "3-4", `领取 #${plan.orderId} 预备原料`, reserved);
+      acted.add(robotId);
+      if (arrived) {
+        const buffered = game.counters[job.bufferKey ?? "pass-top"];
+        if (buffered?.kind === "chopped" && buffered.ingredient === job.ingredient) {
+          robot.carrying = buffered;
+          game.counters[job.bufferKey ?? "pass-top"] = null;
+          job.stage = "pot";
+        }
+      }
+    } else if (job.stage === "cut") {
+      if (!job.boardKey || !job.boardStation) {
+        const occupied = new Set(game.smartPlans.flatMap((candidatePlan) => candidatePlan.jobs.filter((candidate) => candidate !== job && candidate.stage === "cut" && candidate.boardKey).map((candidate) => candidate.boardKey!)));
+        const boards = ([ ["left-cut", "2-0"], ["right-cut", "2-8"] ] as const)
+          .filter(([key]) => !occupied.has(key) && !game.cutBoards[key])
+          .sort((a, b) => positionToStationDistance(robot, a[1]) - positionToStationDistance(robot, b[1]));
+        if (boards[0]) { job.boardKey = boards[0][0]; job.boardStation = boards[0][1]; }
+      }
+      if (job.boardKey && job.boardStation) {
+        const arrived = advanceTo(game, robotId, job.boardStation, `切配 #${plan.orderId} ${ingredientName(job.ingredient)}`, reserved);
+        acted.add(robotId);
+        if (arrived) {
+          const board = game.cutBoards[job.boardKey];
+          if (!board && robot.carrying?.kind === "raw") { game.cutBoards[job.boardKey] = { ingredient: job.ingredient, progress: 0 }; robot.carrying = null; }
+          else if (board && board.progress < 3) board.progress += 1;
+          else if (board?.progress === 3 && !robot.carrying) { robot.carrying = { kind: "chopped", ingredient: job.ingredient }; game.cutBoards[job.boardKey] = null; job.stage = "pot"; }
+        }
+      }
+    } else if (job.stage === "pot") {
+      const arrived = advanceTo(game, robotId, plan.potStation, `送入 #${plan.orderId} ${plan.potKey === "left-pot" ? "主灶" : "备用灶"}`, reserved);
+      acted.add(robotId);
+      if (arrived && robot.carrying?.kind === "chopped") {
+        game.pots[plan.potKey].ingredients.push(robot.carrying.ingredient);
+        robot.carrying = null;
+        job.stage = "loaded";
+        job.robotId = null;
+      }
+    }
+  }
+
+  const canPrefetch = game.smartPlans.filter((plan) => plan.phase === "cook" || plan.phase === "ready").length >= 1;
+  if (canPrefetch && !game.prefetch) {
+    const free = ([0, 1] as const).find((id) => !acted.has(id) && !smartRobotBusy(game, id));
+    if (free !== undefined) startSmartPrefetch(game, free);
+  }
+  if (game.prefetch && game.prefetch.stage !== "staged") {
+    const id = game.prefetch.robotId;
+    if (!acted.has(id) && !smartJobForRobot(game, id)) {
+      advancePrefetch(game, reserved);
+      acted.add(id);
+    }
+  }
+  for (const id of [0, 1] as const) if (!acted.has(id) && !smartRobotBusy(game, id)) {
+    game.robots[id].task = "等待下一项可执行任务";
+    game.robots[id].target = "滚动调度器";
+    game.metrics.idle += 1;
+  }
+  const runningPots = game.smartPlans.filter((plan) => plan.phase !== "serve").length;
+  game.decision = `V5 同时管理 ${runningPots} 道在制订单；优先前置空盘、释放机器人并填满空闲灶台。`;
+  return game;
+}
 function autoStep(previous: GameState, difficulty: Difficulty, algorithm: AlgorithmId = "v1") {
   if (!previous.running || previous.paused || previous.ended) return previous;
+  if (algorithm === "v5") return smartStep(previous, difficulty);
   const game = cloneGame(previous);
   if (!game.cycle) startCycle(game, algorithm);
   const cycle = game.cycle;
@@ -585,18 +879,70 @@ function runBenchmark(algorithm: AlgorithmId, difficulty: Difficulty): Benchmark
 }
 function formatTime(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
 
+type KitchenAudio = { stop: () => void; ding: () => void };
+function startKitchenAudio(): KitchenAudio {
+  const context = new AudioContext();
+  const master = context.createGain();
+  master.gain.value = .085;
+  master.connect(context.destination);
+  const melody = [392, 494, 587, 494, 440, 523, 659, 523, 349, 440, 523, 440, 330, 392, 494, 392];
+  let cursor = 0;
+  const note = (frequency: number, duration: number, volume: number, delay = 0, type: OscillatorType = "triangle") => {
+    const start = context.currentTime + delay;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = type;
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(volume, start + .015);
+    gain.gain.exponentialRampToValueAtTime(.001, start + duration);
+    oscillator.connect(gain); gain.connect(master);
+    oscillator.start(start); oscillator.stop(start + duration + .02);
+  };
+  const beat = () => {
+    const frequency = melody[cursor % melody.length];
+    note(frequency, .19, .26);
+    if (cursor % 4 === 0) note(frequency / 2, .32, .18, 0, "sine");
+    if (cursor % 2 === 1) note(880, .045, .035, .09, "square");
+    cursor += 1;
+  };
+  void context.resume();
+  beat();
+  const timer = window.setInterval(beat, 270);
+  return {
+    stop: () => { window.clearInterval(timer); void context.close(); },
+    ding: () => { note(784, .25, .34); note(1047, .36, .3, .11); },
+  };
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("training");
-  const [algorithm, setAlgorithm] = useState<AlgorithmId>("v1");
+  const [algorithm, setAlgorithm] = useState<AlgorithmId>("v5");
   const [speed, setSpeed] = useState<1 | 2>(1);
+  const [musicOn, setMusicOn] = useState(false);
   const [game, setGame] = useState<GameState>(() => createInitialState("training"));
+  const audioRef = useRef<KitchenAudio | null>(null);
+  const deliveredRef = useRef(0);
   const resetGame = useCallback((nextDifficulty = difficulty, start = false) => setGame(createInitialState(nextDifficulty, start)), [difficulty]);
   const selectMode = (nextMode: Mode) => { setMode(nextMode); setGame(createInitialState(difficulty)); };
   const selectAlgorithm = (nextAlgorithm: AlgorithmId) => {
     setAlgorithm(nextAlgorithm);
     setGame(createInitialState(difficulty));
   };
+  const toggleMusic = () => {
+    if (audioRef.current) {
+      audioRef.current.stop(); audioRef.current = null; setMusicOn(false);
+    } else {
+      audioRef.current = startKitchenAudio(); setMusicOn(true);
+    }
+  };
+
+  useEffect(() => () => audioRef.current?.stop(), []);
+  useEffect(() => {
+    if (game.delivered > deliveredRef.current) audioRef.current?.ding();
+    deliveredRef.current = game.delivered;
+  }, [game.delivered]);
 
   const manualMove = useCallback((dr: number, dc: number) => {
     if (mode !== "manual") return;
@@ -674,7 +1020,7 @@ export default function Home() {
           <button role="tab" aria-selected={mode === "auto"} className={mode === "auto" ? "active" : ""} onClick={() => selectMode("auto")}><i>✦</i> 自动调度</button>
           <button role="tab" aria-selected={mode === "manual"} className={mode === "manual" ? "active" : ""} onClick={() => selectMode("manual")}><i>✥</i> 手动体验</button>
         </div>
-        <button className="restart-button" onClick={() => resetGame(difficulty, true)}>重新开始</button>
+        <div className="top-actions"><button className={`music-button ${musicOn ? "active" : ""}`} aria-pressed={musicOn} onClick={toggleMusic} title="原创程序化厨房配乐">{musicOn ? "♫ 音乐开" : "♪ 音乐关"}</button><button className="restart-button" onClick={() => resetGame(difficulty, true)}>重新开始</button></div>
       </header>
 
       <section className="score-strip" aria-label="运行指标">
@@ -687,7 +1033,7 @@ export default function Home() {
       <section className="workspace">
         <aside className="orders-panel panel">
           <div className="panel-title-row"><div><p className="section-kicker">ORDER QUEUE</p><h2>订单与优先级</h2></div><span className="live-pill"><i /> 动态</span></div>
-          <div className="order-list">{game.orders.map((order) => { const recipe = RECIPES[order.recipe]; const activeOrder = game.cycle?.orderId === order.id; const prefetchedOrder = game.prefetch?.orderId === order.id; return (
+          <div className="order-list">{game.orders.map((order) => { const recipe = RECIPES[order.recipe]; const activeOrder = game.cycle?.orderId === order.id || game.smartPlans.some((plan) => plan.orderId === order.id); const prefetchedOrder = game.prefetch?.orderId === order.id; return (
             <article className={`order-card ${activeOrder ? "selected" : ""} ${prefetchedOrder ? "prefetching" : ""} ${order.remaining < 14 ? "urgent" : ""}`} key={order.id}>
               <div className="ticket-number">#{order.id}</div><div className="dish-icon" style={{ background: recipe.color }}>{recipe.icon}</div>
               <div className="order-copy"><strong>{recipe.name}</strong><span>{recipe.ingredients.map(ingredientName).join(" + ")}</span><div className="order-timer"><i style={{ width: `${Math.max(0, Math.min(100, order.remaining / order.maxTime * 100))}%` }} /></div></div><b>{order.remaining >= 0 ? `${order.remaining}s` : `逾期 ${-order.remaining}s`}</b>
@@ -704,7 +1050,7 @@ export default function Home() {
               const key = coord(row, col); const station = STATIONS[key]; const robot = game.robots.find((candidate) => candidate.row === row && candidate.col === col); const isWall = WALLS.has(key);
               let status = "";
               if (station?.type === "cut") { const board = game.cutBoards[station.key]; status = board ? (board.progress === 3 ? "✓" : `${board.progress}/3`) : ""; }
-              if (station?.type === "stove") { const pot = game.pots[station.key]; status = pot.ready ? "熟" : pot.recipe ? `${pot.cookLeft}s` : pot.ingredients.length ? `${pot.ingredients.length}/2` : ""; }
+              if (station?.type === "stove") { const pot = game.pots[station.key]; const staged = game.smartPlans.some((plan) => plan.potKey === station.key && plan.plateStaged); const potStatus = pot.ready ? "熟" : pot.recipe ? `${pot.cookLeft}s` : pot.ingredients.length ? `${pot.ingredients.length}/2` : ""; status = `${potStatus}${staged ? "·盘" : ""}`; }
               if (station?.type === "counter") status = itemIcon(game.counters[station.key]);
               return <div className={`cell ${isWall ? "wall" : ""} ${station ? `station ${station.type}` : "floor"}`} key={key}>
                 {station && <><span className="station-icon">{station.icon}</span><small>{station.label}</small>{status && <b className="station-status">{status}</b>}</>}
@@ -724,7 +1070,7 @@ export default function Home() {
             <div className="robot-cards">{game.robots.map((robot) => <article key={robot.id} className={`robot-card ${robot.color}`}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>机器人 {robot.shortName}</small><strong>{robot.task}</strong><em>目标：{robot.target} · {itemLabel(robot.carrying)}</em></span><span className="status-dot" /></article>)}</div>
             <div className="metric-grid"><div><span>累计移动</span><strong>{game.metrics.travel}</strong><small>格</small></div><div><span>避碰等待</span><strong>{game.metrics.conflicts}</strong><small>次</small></div><div><span>累计逾期</span><strong>{game.metrics.tardiness}</strong><small>秒</small></div><div><span>滚动规划</span><strong>{game.metrics.replans}</strong><small>次</small></div></div>
             <div className="benchmark-card"><div className="benchmark-heading"><span>标准化 120 秒结果</span><small>{difficulty === "training" ? "标准到达" : "高峰到达"}</small></div><div className="benchmark-table"><span>算法</span><span>完成</span><span>得分</span><span>逾期</span>{benchmarkResults.map((result) => <button key={result.algorithm} className={algorithm === result.algorithm ? "active" : ""} onClick={() => selectAlgorithm(result.algorithm)}><b>{ALGORITHMS[result.algorithm].version}</b><strong>{result.delivered}</strong><em>{result.score}</em><small>{result.tardiness}s</small><i>{result.sequence || "—"}</i></button>)}</div><p>固定初始订单与 2 次决策步/秒；第二行显示交付顺序。结果来自同一离散事件仿真，不是预设文案。</p></div>
-            <div className="method-card"><p>{selectedMethod.version} · {selectedMethod.kind.toUpperCase()}</p><strong>{selectedMethod.name}</strong><ol>{selectedMethod.steps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}</ol><em>{selectedMethod.note}</em></div>
+            <details className="method-details"><summary>查看 {selectedMethod.version} 算法逻辑 <span>＋</span></summary><div className="method-card"><p>{selectedMethod.version} · {selectedMethod.kind.toUpperCase()}</p><strong>{selectedMethod.name}</strong><ol>{selectedMethod.steps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}</ol><em>{selectedMethod.note}</em></div></details>
           </> : <>
             <div className="panel-title-row"><div><p className="section-kicker">MANUAL MODE</p><h2>手动体验</h2></div><span className="team-count">对照组</span></div>
             <div className="robot-cards">{game.robots.map((robot) => <button key={robot.id} className={`robot-card ${robot.color} ${game.activeRobot === robot.id ? "active" : ""}`} onClick={() => setGame((previous) => ({ ...previous, activeRobot: robot.id }))}><span className="avatar"><i/><i/><b>{robot.shortName}</b></span><span className="robot-meta"><small>机器人 {robot.shortName}</small><strong>{robot.name}</strong><em>{itemLabel(robot.carrying)}</em></span></button>)}</div>
@@ -734,7 +1080,7 @@ export default function Home() {
           </>}
         </aside>
       </section>
-      <footer><span><i /> 双机器人离散事件仿真 · V1–V4</span><p>仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
+      <footer><span><i /> 双机器人离散事件仿真 · V1–V5</span><p>原创程序化配乐 · 仅供学习与研究参考，禁止商业使用。<a href="https://github.com/marsguo2049/kitchen/blob/main/LICENSE" target="_blank" rel="noreferrer">查看许可</a><a href="https://github.com/marsguo2049/kitchen/issues/new" target="_blank" rel="noreferrer">使用前告知作者</a></p><span>POLYFORM NONCOMMERCIAL 1.0.0</span></footer>
     </main>
   );
 }

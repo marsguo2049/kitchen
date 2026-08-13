@@ -1,12 +1,13 @@
 # Robo Kitchen
 
-Robo Kitchen is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders on a fixed discrete grid. The page lets the user run the same deterministic scenario with four scheduling algorithms and compare throughput, score, tardiness, travel, waiting, and delivery sequence.
+Robo Kitchen is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders on a fixed discrete grid. The page lets the user run the same deterministic scenario with five scheduling algorithms and compare throughput, score, tardiness, travel, waiting, and delivery sequence.
 
 ## What is modelled
 
 - **Simulation:** orders, deadlines, precedence constraints, shared workstations, cooking time, robot state, and four-direction movement.
 - **Routing:** breadth-first search (BFS) finds a shortest feasible path to a workstation; one-step position reservations prevent two robots from entering the same cell.
-- **Scheduling:** V1–V3 are explainable heuristics. V4 exactly enumerates the current three-order sequencing subproblem, but is not a claim of global optimality for the full kitchen simulation.
+- **Scheduling:** V1–V3 are explainable heuristics. V4 exactly enumerates the current three-order sequencing subproblem. V5 adds resource-aware dual-stove scheduling, plate staging, and opportunistic preparation while food cooks.
+- **Audio:** the optional soundtrack is generated in the browser from an original note pattern. No music or audio asset from *Overcooked* is included.
 
 Every dish follows:
 
@@ -20,8 +21,9 @@ Every dish follows:
 | V2 | Cross-order pipeline | While one dish cooks, prepare and buffer an ingredient for the next order | Pipeline heuristic |
 | V3 | Distance auction | Enumerate robot–ingredient–cutting-board assignments and choose the least estimated travel | Assignment heuristic |
 | V4 | Exact short-window search | Enumerate all current three-order sequences, then combine the best sequence with V3 assignment | Exact only for the stated surrogate subproblem |
+| V5 | Resource-aware dual-stove dispatch | Keep both stoves occupied, stage plates beside cooking pots, and dynamically give free robots the next executable prep task | Rolling resource-aware heuristic |
 
-The algorithms are deliberately cumulative: V2 adds pipeline overlap to V1, V3 adds flexible task allocation to V2, and V4 adds rolling exact sequencing to V3.
+The algorithms are deliberately cumulative: V2 adds pipeline overlap to V1, V3 adds flexible task allocation to V2, V4 adds rolling exact sequencing to V3, and V5 adds concurrent work-in-process across both stoves with anticipatory plate and prep decisions.
 
 ## Standardized comparison
 
@@ -35,16 +37,18 @@ Representative deterministic results:
 | Standard | V2 | 4 | 742 | 12 s | #1 → #2 → #3 → #4 |
 | Standard | V3 | 5 | 972 | 0 s | #1 → #2 → #3 → #4 |
 | Standard | V4 | 5 | 972 | 0 s | #1 → #2 → #3 → #4 |
+| Standard | V5 | 6 | 1352 | 0 s | #2 → #1 → #3 → #4 |
 | Rush | V1 | 4 | 607 | 91 s | #1 → #2 → #3 → #4 |
 | Rush | V2 | 4 | 607 | 82 s | #1 → #2 → #3 → #4 |
 | Rush | V3 | 4 | 610 | 70 s | #1 → #2 → #3 → #4 |
 | Rush | V4 | 4 | 610 | 70 s | #1 → #3 → #2 → #4 |
+| Rush | V5 | 5 | 804 | 64 s | #1 → #3 → #2 → #4 |
 
 Equal objective values are valid ties. For example, V3 and V4 produce the same rush score and tardiness here, while V4 selects a different sequence. This is useful experimental evidence rather than a reason to force artificial numerical differences.
 
 ## Modes
 
-- **Automatic dispatch** is the default. Select V1, V2, V3, or V4 before starting a run.
+- **Automatic dispatch** is the default, with V5 preselected. Select V1–V5 before starting a run.
 - **Manual experience** preserves the same kitchen and process as a human-control comparison.
 - **Standard / rush demand** changes order deadlines and cooking pressure.
 
@@ -64,7 +68,7 @@ npm run test:flow
 npm run build:pages
 ```
 
-The regression suite checks the immutable 9×8 map, all four algorithms in both demand modes, two-order completion without deadlock, cross-order preparation in V2–V4, and meaningful benchmark differences.
+The regression suite checks the immutable 9×8 map, all five algorithms in both demand modes, completion without deadlock, cross-order preparation, V5 dual-stove use, plate staging, preparation during cooking, and meaningful benchmark differences.
 
 ## GitHub Pages
 
