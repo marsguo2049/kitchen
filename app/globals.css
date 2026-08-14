@@ -242,6 +242,18 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
 .live-objective > span { display: block; margin-bottom: 5px; color: var(--teal-dark); font-size: 9px; font-weight: 900; }
 .live-objective select { width: 100%; min-height: 34px; padding: 0 8px; border: 1px solid #c8ddd6; border-radius: 8px; background: #fff; color: var(--ink); font-size: 10px; font-weight: 900; }
 .live-objective small { display: block; margin-top: 6px; color: #647875; font-size: 8px; line-height: 1.45; }
+.scenario-selector { margin: -2px 0 10px; padding: 10px; border: 1px solid #e1e4de; border-radius: 12px; background: #fafaf6; }
+.scenario-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.scenario-heading span { color: var(--ink); font-size: 9px; font-weight: 900; }
+.scenario-heading small { color: var(--muted); font: 700 8px var(--font-geist-mono), monospace; }
+.scenario-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.scenario-grid button { min-width: 0; border: 1px solid #dde1db; border-radius: 9px; padding: 7px 3px; background: #fff; color: var(--muted); cursor: pointer; }
+.scenario-grid button strong, .scenario-grid button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scenario-grid button strong { font-size: 9px; }.scenario-grid button small { margin-top: 2px; font: 700 7px var(--font-geist-mono), monospace; }
+.scenario-grid button.active { border-color: var(--coral); background: #fff3ef; color: var(--coral-dark); box-shadow: 0 0 0 2px rgba(239,106,84,.1); }
+.scenario-selector > p { margin: 7px 0 0; color: #6b7774; font-size: 8px; line-height: 1.4; }
+.kitchen-grid.map-zoned .station small, .kitchen-grid.map-ushape .station small { font-size: clamp(5px, .55vw, 8px); }
+.kitchen-grid.map-zoned .station-icon { font-size: clamp(10px, 1.5vw, 19px); }
 .lab-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-bottom: 10px; padding: 3px; border-radius: 11px; background: #eef1ec; }
 .lab-tabs button { min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 900; cursor: pointer; }
 .lab-tabs button.active { color: var(--ink); background: #fff; box-shadow: 0 2px 7px rgba(23,50,56,.08); }
@@ -388,7 +400,7 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
   .topbar { flex-wrap: wrap; }
   .mode-tabs { order: 3; width: 100%; }
   .mode-tabs button { flex: 1; }
-  .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
+  .controls-panel .scenario-selector, .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
   .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid { grid-column: auto; }
   .controls-panel .method-details, .controls-panel .method-card { grid-column: 1 / -1; margin-top: 0; }
   .constraint-grid, .policy-flow { grid-template-columns: 1fr 1fr; }
@@ -398,7 +410,7 @@ footer a { margin-left: 8px; color: var(--teal-dark); font-weight: 900; text-und
 @media (max-width: 760px) {
   .topbar .top-actions { margin-left: auto; }
   .task-bubble { display: none; }
-  .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
+  .controls-panel .scenario-selector, .controls-panel .algorithm-selector, .controls-panel .live-objective, .controls-panel .auto-actions, .controls-panel .robot-cards, .controls-panel .metric-grid, .controls-panel .benchmark-card, .controls-panel .lab-tabs, .controls-panel .lab-view { grid-column: 1 / -1; }
   .controls-panel .method-details, .controls-panel .method-card { grid-column: 1 / -1; }
   .auto-actions { grid-template-columns: 1fr 92px; }
   .model-hero { grid-template-columns: 1fr; }

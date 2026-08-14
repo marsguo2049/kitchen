@@ -1,18 +1,16 @@
 # Robo Kitchen
 
-Robo Kitchen is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders on a fixed discrete grid. The page compares three meaningfully different scheduling strategies through user-configured, on-demand simulation experiments.
+Robo Kitchen V7 is a 2D operations-research teaching prototype in which two robots cooperate to fulfil timed kitchen orders. Users can compare three scheduling strategies across three kitchen layouts and three genuinely different recipe workflows through on-demand simulation experiments.
 
 ## What is modelled
 
-- **Simulation:** orders, deadlines, precedence constraints, shared workstations, cooking time, robot state, and four-direction movement.
+- **Simulation:** orders, deadlines, recipe precedence graphs, equipment compatibility, processing times, robot state, and four-direction movement.
 - **Routing:** breadth-first search (BFS) finds a shortest feasible path to a workstation; one-step position reservations prevent two robots from entering the same cell.
-- **Scheduling:** the active comparison contains a sequential baseline, a single-stove pipeline with distance auction, and a rolling dual-stove resource-aware heuristic. The selected objective actively changes their online priorities.
+- **Scheduling:** the active comparison contains a sequential baseline, a single-resource pipeline with distance auction, and a rolling compatibility-aware resource heuristic. The selected objective actively changes their online priorities.
 - **Experiment runner:** choose a 30–600 second horizon, demand pressure, and evaluation objective; results are generated only when the experiment is run and can be exported as Markdown.
 - **Audio:** the optional soundtrack is generated in the browser from an original note pattern. No music or audio asset from *Overcooked* is included.
 
-Every dish follows:
-
-`collect ingredients → chop → load pot → cook → collect plate → plate → serve`
+V7 contains three workflows: Garden Salad (`chop → mix`), Tomato Mushroom Soup (`chop → simmer`), and Mushroom Skillet (`prep → grill`). They use different ingredients, cutting work, processing time, and compatible equipment.
 
 ## Formal model
 
@@ -24,13 +22,14 @@ This is an online, discrete-time scheduling simulation with policy-based heurist
 | --- | --- | --- |
 | `R` | Robots | `{A, B}` |
 | `O / O_t` | All released orders / active orders at decision time `t` | Three active orders; one replacement is released after each delivery |
-| `V, E` | Walkable grid cells and four-neighbour edges | Fixed `9 × 8` map; no diagonal movement |
-| `K` | Shared workstations | Two cutting boards, two stoves, two pass counters, plate, bin, and serving stations |
-| `G_i` | Ingredient jobs required by order `i` | Two jobs per recipe |
+| `𝒮` | Kitchen scenarios | Compact `8×9`, U-shape `9×11`, zoned `10×13` |
+| `V_s, E_s` | Scenario-specific walkable cells and four-neighbour edges | No diagonal movement; static walls and stations |
+| `K` | Shared processing resources | Two cutting boards and two capability-constrained processing resources |
+| `G_i` | Recipe precedence graph for order `i` | Mix, simmer, or grill workflow |
 | `H` | Experiment horizon | User-selected `30–600` seconds |
 | `D_i` | Order allowance | `70 s` standard / `46 s` rush |
-| `τ_cut` | Cutting work | Three decision actions per ingredient |
-| `τ_cook` | Cooking time | `8 s` standard / `11 s` rush |
+| `τ_ij` | Operation work/time | Recipe-specific cut actions and processing duration |
+| `a_jk` | Equipment compatibility | 1 when resource `k` can execute operation `j` |
 
 `δ(p,s)` denotes the BFS shortest-path distance from robot position `p` to a walkable service cell adjacent to station `s`.
 
@@ -51,11 +50,11 @@ Movement and collision avoidance:
 
 `p_r,t+1 ∈ N(p_rt) ∪ {p_rt}`, and `p_At ≠ p_Bt`.
 
-Robot and stove capacity:
+Robot and processing-resource capacity:
 
 `Σ_i,j x_rijt ≤ 1` for every robot and decision step, and `Σ_i z_ikt ≤ 1` for every stove and step.
 
-Each robot carries at most one item. A cutting board and pass position store at most one item, a stove processes at most one recipe, and cooking starts only after two chopped ingredients arrive. Every order respects the precedence chain shown above.
+Each robot carries at most one item. A cutting board and pass position store at most one item, a processing resource handles at most one recipe, and `z_ikt ≤ a_jk` enforces equipment compatibility. Every order respects its recipe DAG.
 
 ### Objectives and score
 
@@ -78,7 +77,7 @@ where `k_i` is the consecutive on-time delivery count. A late delivery resets th
 
 - **A — sequential objective baseline:** selects an order with the active objective vector `v_f(i)`, keeps fixed robot/board roles, and processes one order at a time.
 - **B — pipeline auction:** uses the same objective-guided order priority, then enumerates ingredient and cutting-board assignments with `c(r,g,b,k) = δ(p_r,s_g) + δ(s_g,b) + δ(b,k)`. One future ingredient is prefetched while the current dish cooks.
-- **C — rolling dual stove:** enumerates the current order-window permutations and compares an objective-specific vector `V_f(π)`. It fills both stoves and assigns free robots with `h_f(r,i,j)`, whose distance, urgency, and processing-time weights depend on objective `f`.
+- **C — rolling resource scheduling:** enumerates the current order-window permutations, matches recipes to compatible equipment, and assigns free robots with `h_f(r,i,j)`, whose distance, urgency, and processing-time weights depend on objective `f`.
 
 The C-policy sequencing estimates (`19`, `21`, or `22`, plus a `2`-unit recipe-change allowance) are priority surrogates only; they are not the simulator's physical processing times.
 
@@ -88,7 +87,7 @@ The C-policy sequencing estimates (`19`, `21`, or `22`, plus a `2`-unit recipe-c
 | --- | --- | --- | --- |
 | A · Baseline | Sequential objective priority | Active objective vector, fixed robot roles, next order after delivery | Reproducible baseline |
 | B · Pipeline | Pipeline + distance auction | Prepare the next order while cooking and assign work by estimated travel | Combines former V2 and V3 |
-| C · Dual stove | Rolling window + resource dispatch | Use both stoves, stage plates beside pots, and keep free robots preparing future work | Combines former V4 and V5 |
+| C · Dual resource | Rolling window + compatibility dispatch | Use both resources, stage plates, and keep free robots preparing future work | Current strongest heuristic |
 
 The earlier V1–V5 labels are retained as project history, but the interface no longer treats every incremental feature as an independent competitor. This avoids redundant comparisons.
 
@@ -118,7 +117,7 @@ After a run, the complete parameters, ranking, metrics, delivery sequence, score
 
 ## Modes
 
-- **Automatic dispatch** is the default, with the rolling dual-stove strategy preselected.
+- **Automatic dispatch** is the default, with rolling resource scheduling preselected.
 - **Manual experience** preserves the same kitchen and process as a human-control comparison.
 - **Standard / rush demand** changes order deadlines and cooking pressure.
 
@@ -138,20 +137,13 @@ npm run test:flow
 npm run build:pages
 ```
 
-The regression suite checks the immutable 9×8 map, all three strategies in both demand modes, completion without deadlock, cross-order preparation, dual-stove use, plate staging, configurable horizons, the explicit late-delivery penalty, and Markdown export contents.
+The regression suite checks all 18 strategy × pressure × layout combinations, station reachability, immutable map geometry, recipe/equipment differences, completion without deadlock, cross-order preparation, dual-resource use, plate staging, configurable horizons, score penalties, English runtime text, and Markdown reports.
 
-## Current recipe scope and roadmap
+## V7 scope and roadmap
 
-The interface names three recipes—tomato soup, mushroom soup, and garden stew—but all currently share the same two-ingredient precedence structure. They therefore represent recipe variants, not three fundamentally different production processes.
+V7 deliberately uses a parameterized real-kitchen abstraction rather than game-like arbitrary maps. The compact galley (`6.0×5.4 m`), medium U-shape (`8.2×6.6 m`), and large zoned kitchen (`11.5×8.4 m`) preserve recognizable kitchen structure while varying distance, congestion, and zoning. These are interpretable scenario parameters, not measurements from a calibrated physical site.
 
-The V6.3 model page now defines the next scalable formulation:
-
-- a seeded scenario generator for reachable maps with controllable congestion and workstation counts;
-- a recipe generator for ingredient sets, precedence graphs, processing times, and workstation requirements;
-- a robot set `R={1,…,m}` with matching collision, carrying, and resource-capacity constraints;
-- stored scenario files and random seeds for reproducible comparisons.
-
-These generators are deliberately specified but not yet activated, so the current V6.3 experiment remains controlled and interpretable.
+The next version will scale the robot set from the fixed pair to `R={1,…,m}` (initially 2–6) and expand collision, carrying, and capacity constraints. Seeded layout and recipe generators follow after the multi-robot model is stable, so results remain reproducible and causally interpretable.
 
 ## GitHub Pages
 
